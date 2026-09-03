@@ -129,6 +129,9 @@ function createMockAudioContext() {
       this.value = val;
       scheduledEvents.push({ type: 'setValueAtTime', val, time });
     }
+    cancelScheduledValues(time) {
+      scheduledEvents.push({ type: 'cancelScheduledValues', time });
+    }
     linearRampToValueAtTime(val, time) {
       this.value = val;
       scheduledEvents.push({ type: 'linearRampToValueAtTime', val, time });
@@ -320,3 +323,63 @@ test('SoundManager initializes Web Audio graph and controls soundscape', async (
   sound.stopMusic();
   assert.equal(sound.isMusicPlaying, false, 'Music should stop');
 });
+
+test('SoundManager properly cancels scheduled values and clamps nextNoteTime on tab inactivity', async () => {
+  const { MockAudioContextInstance, scheduledEvents } = createMockAudioContext();
+  const mockCtx = new MockAudioContextInstance();
+  mockCtx.currentTime = 10.0;
+
+  const sound = new SoundManager({ audioContext: mockCtx });
+  await sound.startAudio();
+
+  // Check startMusic schedules cancelScheduledValues before linearRampToValueAtTime
+  const eventCountBefore = scheduledEvents.length;
+  sound.startMusic();
+
+  const musicEvents = scheduledEvents.slice(eventCountBefore);
+  const cancelEvents = musicEvents.filter(e => e.type === 'cancelScheduledValues');
+  const rampEvents = musicEvents.filter(e => e.type === 'linearRampToValueAtTime');
+  assert.ok(cancelEvents.length >= 1, 'cancelScheduledValues should be called before ramp');
+  assert.ok(rampEvents.length >= 1, 'linearRampToValueAtTime should be called');
+
+  // Verify duckMusic and unduckMusic also call cancelScheduledValues
+  const duckStartIdx = scheduledEvents.length;
+  sound.duckMusic();
+  const duckEvents = scheduledEvents.slice(duckStartIdx);
+  assert.ok(duckEvents.some(e => e.type === 'cancelScheduledValues'), 'duckMusic must cancel scheduled values');
+  assert.equal(sound.musicGain.gain.value, MUSIC_CONFIG.duckedGainLinear);
+
+  const unduckStartIdx = scheduledEvents.length;
+  sound.unduckMusic();
+  const unduckEvents = scheduledEvents.slice(unduckStartIdx);
+  assert.ok(unduckEvents.some(e => e.type === 'cancelScheduledValues'), 'unduckMusic must cancel scheduled values');
+  assert.equal(sound.musicGain.gain.value, MUSIC_CONFIG.gainLinear);
+
+  // Tab inactivity test: simulate browser tab backgrounded, currentTime jumping ahead
+  // Initially nextNoteTime was ~10.05
+  sound.nextNoteTime = 10.05;
+  // Tab was minimized, 5 seconds elapsed
+  mockCtx.currentTime = 15.0;
+
+  const stepDuration = 60 / (MUSIC_CONFIG.bpm * 4); // ~0.1171875s
+  sound._scheduleMusicSteps(stepDuration);
+
+  // Clamping should ensure nextNoteTime jumped to at least 15.0 (now),
+  // instead of iterating from 10.05 all the way to 15.15 (~43 steps)
+  assert.ok(
+    sound.nextNoteTime >= 15.0,
+    `nextNoteTime should be clamped to >= currentTime (15.0), got ${sound.nextNoteTime}`
+  );
+  assert.ok(
+    sound.nextNoteTime <= 15.0 + 0.15 + stepDuration,
+    `nextNoteTime should not exceed lookahead buffer window, got ${sound.nextNoteTime}`
+  );
+
+  // Check stopMusic cancels scheduled values and ramps down
+  const stopStartIdx = scheduledEvents.length;
+  sound.stopMusic();
+  const stopEvents = scheduledEvents.slice(stopStartIdx);
+  assert.ok(stopEvents.some(e => e.type === 'cancelScheduledValues'), 'stopMusic must cancel scheduled values');
+  assert.equal(sound.isMusicPlaying, false);
+});
+

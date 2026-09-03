@@ -195,7 +195,7 @@ export class SoundManager {
 
     // 3. Music Bed Gain (-18 dB continuous background gain)
     this.musicGain = ctx.createGain();
-    this.musicGain.gain.setValueAtTime(MUSIC_CONFIG.gainLinear, now);
+    this.musicGain.gain.setValueAtTime(0.0001, now);
     this.musicGain.connect(this.masterGain);
 
     // Pre-create 2-second looped white noise buffer for drift, nitro, and snare
@@ -476,9 +476,9 @@ export class SoundManager {
     if (!this.musicGain) return;
     this.isDucked = true;
     const now = (this.audioCtx && this.audioCtx.currentTime) || 0;
+    this.musicGain.gain.cancelScheduledValues(now);
     this.musicGain.gain.setValueAtTime(this.musicGain.gain.value, now);
     this.musicGain.gain.linearRampToValueAtTime(MUSIC_CONFIG.duckedGainLinear, now + MUSIC_CONFIG.duckAttack);
-    this.musicGain.gain.value = MUSIC_CONFIG.duckedGainLinear;
   }
 
   /**
@@ -488,9 +488,9 @@ export class SoundManager {
     if (!this.musicGain) return;
     this.isDucked = false;
     const now = (this.audioCtx && this.audioCtx.currentTime) || 0;
+    this.musicGain.gain.cancelScheduledValues(now);
     this.musicGain.gain.setValueAtTime(this.musicGain.gain.value, now);
     this.musicGain.gain.linearRampToValueAtTime(MUSIC_CONFIG.gainLinear, now + MUSIC_CONFIG.duckRelease);
-    this.musicGain.gain.value = MUSIC_CONFIG.gainLinear;
   }
 
   /**
@@ -503,9 +503,9 @@ export class SoundManager {
     const now = this.audioCtx.currentTime || 0;
 
     // Smooth fade in
-    this.musicGain.gain.setValueAtTime(0.001, now);
+    this.musicGain.gain.cancelScheduledValues(now);
+    this.musicGain.gain.setValueAtTime(this.musicGain.gain.value, now);
     this.musicGain.gain.linearRampToValueAtTime(MUSIC_CONFIG.gainLinear, now + 0.3);
-    this.musicGain.gain.value = MUSIC_CONFIG.gainLinear;
 
     // 128 BPM clock: 1 beat = 60/128 = 0.46875s; 16th note = 0.1171875s
     const stepDuration = 60 / (MUSIC_CONFIG.bpm * 4);
@@ -527,12 +527,25 @@ export class SoundManager {
 
     const scheduleAhead = 0.15; // Schedule 150ms ahead
     const currentTime = this.audioCtx.currentTime || 0;
+    const now = currentTime;
+
+    // Tab inactivity clamping: if browser tab was backgrounded/minimized,
+    // protect against note bursts when returning to the tab.
+    this.nextNoteTime = Math.max(this.nextNoteTime, now);
 
     while (this.nextNoteTime < currentTime + scheduleAhead) {
       this._playSequenceStep(this.musicStep, this.nextNoteTime);
       this.nextNoteTime += stepDuration;
       this.musicStep = (this.musicStep + 1) % 64; // 4 bars of 16 steps
     }
+  }
+
+  /**
+   * Alias for scheduler notes loop
+   * @private
+   */
+  _scheduleMusicNotes(stepDuration) {
+    return this._scheduleMusicSteps(stepDuration);
   }
 
   /**
@@ -680,9 +693,9 @@ export class SoundManager {
 
     if (this.musicGain) {
       const now = (this.audioCtx && this.audioCtx.currentTime) || 0;
+      this.musicGain.gain.cancelScheduledValues(now);
       this.musicGain.gain.setValueAtTime(this.musicGain.gain.value, now);
       this.musicGain.gain.linearRampToValueAtTime(0.0001, now + MUSIC_CONFIG.fadeTime);
-      this.musicGain.gain.value = 0;
     }
   }
 }
