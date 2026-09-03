@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>3D Synthwave Circuit Racer</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div id="game-container">
+    <canvas id="game-canvas"></canvas>
+
+    <!-- Top HUD Bar -->
+    <div id="hud">
+      <div class="hud-panel left">
+        <div class="hud-label">POS</div>
+        <div id="hud-position" class="hud-value neon-pink">1ST<span class="hud-sub">/6</span></div>
+      </div>
+      <div class="hud-panel center">
+        <div class="hud-label">LAP</div>
+        <div id="hud-lap" class="hud-value neon-cyan">1/3</div>
+        <div id="hud-notification" class="hud-banner"></div>
+      </div>
+      <div class="hud-panel right">
+        <div class="timer-row"><span class="hud-label">TIME</span> <span id="hud-timer" class="hud-mono">00:00.00</span></div>
+        <div class="timer-row"><span class="hud-label">BEST</span> <span id="hud-best-lap" class="hud-mono">--:--.--</span></div>
+      </div>
+    </div>
+
+    <!-- Minimap Radar -->
+    <div id="minimap-container">
+      <canvas id="minimap-canvas" width="160" height="160"></canvas>
+    </div>
+
+    <!-- Bottom Speedometer & Nitro -->
+    <div id="dashboard">
+      <div id="speedometer">
+        <span id="hud-speed" class="speed-number">0</span>
+        <span class="speed-unit">KM/H</span>
+      </div>
+      <div id="nitro-gauge">
+        <div class="nitro-label">NITRO</div>
+        <div class="nitro-track">
+          <div id="hud-nitro-fill" class="nitro-fill" style="width: 100%;"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Countdown Overlay -->
+    <div id="countdown-overlay" class="hidden">
+      <span id="countdown-text">3</span>
+    </div>
+
+    <!-- Main Menu Screen -->
+    <div id="menu-screen" class="screen-overlay">
+      <div class="menu-box">
+        <h1 class="glitch-title" data-text="SYNTHWAVE RACER">SYNTHWAVE RACER</h1>
+        <p class="subtitle">OUTRUN THE GRID // DEFEAT THE RIVALS</p>
+        <div class="instructions">
+          <p><strong>W / &uarr;</strong> Accelerate &nbsp;|&nbsp; <strong>S / &darr;</strong> Brake / Reverse</p>
+          <p><strong>A / D / &larr; / &rarr;</strong> Steer &nbsp;|&nbsp; <strong>SPACE</strong> Drift</p>
+          <p><strong>SHIFT</strong> Nitro Boost &nbsp;|&nbsp; <strong>C</strong> Camera &nbsp;|&nbsp; <strong>R</strong> Reset</p>
+        </div>
+        <button id="start-btn" class="neon-btn">START RACE</button>
+      </div>
+    </div>
+
+    <!-- Pause Screen -->
+    <div id="pause-screen" class="screen-overlay hidden">
+      <div class="menu-box">
+        <h2 class="neon-cyan">PAUSED</h2>
+        <p class="subtitle">PRESS ESC TO RESUME</p>
+        <button id="resume-btn" class="neon-btn">RESUME</button>
+      </div>
+    </div>
+
+    <!-- Finish / Results Screen -->
+    <div id="finish-screen" class="screen-overlay hidden">
+      <div class="menu-box finish-box">
+        <h2 id="finish-title" class="neon-pink">RACE FINISHED</h2>
+        <div id="finish-rank-callout" class="rank-callout">1ST PLACE</div>
+        <div class="leaderboard-wrapper">
+          <table id="leaderboard-table">
+            <thead>
+              <tr><th>POS</th><th>DRIVER</th><th>TOTAL TIME</th><th>BEST LAP</th></tr>
+            </thead>
+            <tbody id="leaderboard-body"></tbody>
+          </table>
+        </div>
+        <button id="restart-btn" class="neon-btn">RACE AGAIN</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+      }
+    }
+  </script>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
