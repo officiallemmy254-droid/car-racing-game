@@ -441,11 +441,12 @@ export class Environment {
   }
 
   /**
-   * Updates atmospheric animations: subtle sun glow pulse, horizon breathing, and ground motion
+   * Updates atmospheric animations: subtle sun glow pulse, horizon breathing, ground motion, and sun orientation
    * @param {number} time - Elapsed time in seconds
    * @param {number} dt - Frame delta time in seconds
+   * @param {object} [camera] - Optional camera for billboarding / yaw alignment
    */
-  update(time, dt) {
+  update(time, dt, camera = null) {
     // Subtle sun pulsation (breathing rhythm)
     if (this.sun && this.sun.group) {
       const pulse = 1.0 + Math.sin(time * 1.5) * 0.025;
@@ -453,6 +454,14 @@ export class Environment {
 
       if (this.sun.glow && this.sun.glow.material) {
         this.sun.glow.material.opacity = 0.35 + Math.sin(time * 2.2) * 0.08;
+      }
+
+      // Billboard sun to face camera yaw if camera is provided
+      if (camera && camera.position && this.sun.group.rotation) {
+        const dx = camera.position.x - this.sun.group.position.x;
+        const dz = camera.position.z - this.sun.group.position.z;
+        const yaw = Math.atan2(dx, dz);
+        this.sun.group.rotation.y = yaw;
       }
     }
 
@@ -476,6 +485,10 @@ export class Environment {
    * Release Three.js resources cleanly
    */
   dispose() {
+    if (this.scene) {
+      this.scene.fog = null;
+    }
+
     if (this.group && this.scene && typeof this.scene.remove === 'function') {
       this.scene.remove(this.group);
     }

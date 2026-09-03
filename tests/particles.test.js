@@ -441,9 +441,77 @@ test('ParticleSystem bounds and speed streak lines activate at high velocity', (
   assert.equal(particles.speedLinesActive, true, 'Speed lines should be active');
   assert.equal(particles.speedLinesMesh.visible, true, 'Speed lines mesh should be visible when active');
 
-  // Also support emitSpeedLines alias from brief
+  // Also support emitSpeedLines with full argument forwarding (camPos, camForward, true)
+  particles.emitSpeedLines(camPos, camForward, true);
+  assert.equal(particles.speedLinesActive, true, 'emitSpeedLines(camPos, camForward, true) must activate speed lines');
+  assert.equal(particles.speedLinesMesh.visible, true);
+
+  particles.emitSpeedLines(camPos, camForward, false);
+  assert.equal(particles.speedLinesActive, false, 'emitSpeedLines(camPos, camForward, false) must deactivate speed lines');
+  assert.equal(particles.speedLinesMesh.visible, false);
+
+  // Also support 2-argument alias emitSpeedLines(camPos, active)
   particles.emitSpeedLines(camPos, true);
   assert.equal(particles.speedLinesActive, true);
+});
+
+test('ParticleSystem._createPointsObject attaches onBeforeCompile hook supporting per-vertex size', () => {
+  const THREE = createMockThree();
+  const scene = new THREE.Scene();
+  const particles = new ParticleSystem(scene, { maxParticles: 100, THREE });
+
+  assert.equal(typeof particles.material.onBeforeCompile, 'function', 'material.onBeforeCompile must be defined');
+
+  const dummyShader = {
+    vertexShader: 'void main() {\n  gl_PointSize = size;\n  gl_Position = projectionMatrix * mvPosition;\n}'
+  };
+  particles.material.onBeforeCompile(dummyShader);
+
+  assert.ok(dummyShader.vertexShader.startsWith('attribute float size;\n'), 'Shader must inject attribute float size');
+  assert.ok(dummyShader.vertexShader.includes('gl_PointSize = size * ( 300.0 / - mvPosition.z );'), 'Shader must replace gl_PointSize with attenuated per-vertex size');
+});
+
+test('ParticleSystem.update only sets needsUpdate when active particles exist or were active in previous frame', () => {
+  const THREE = createMockThree();
+  const scene = new THREE.Scene();
+  const particles = new ParticleSystem(scene, { maxParticles: 100, THREE });
+
+  // Reset needsUpdate flags initially
+  particles.positionAttribute.needsUpdate = false;
+  particles.colorAttribute.needsUpdate = false;
+  particles.sizeAttribute.needsUpdate = false;
+
+  // Frame 1: Completely idle (activeCount === 0 and wasActiveLastFrame === false)
+  particles.update(0.016);
+  assert.equal(particles.positionAttribute.needsUpdate, false, 'Should not mark buffers for update when idle');
+  assert.equal(particles.colorAttribute.needsUpdate, false);
+  assert.equal(particles.sizeAttribute.needsUpdate, false);
+
+  // Frame 2: Emit a particle (activeCount > 0)
+  particles.emitExhaust({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 10 }, null, false);
+  particles.update(0.016);
+  assert.equal(particles.positionAttribute.needsUpdate, true, 'Must mark buffers for update when particles active');
+  assert.equal(particles.colorAttribute.needsUpdate, true);
+  assert.equal(particles.sizeAttribute.needsUpdate, true);
+
+  // Frame 3: Expire particle (fast-forward past lifetime)
+  particles.positionAttribute.needsUpdate = false;
+  particles.colorAttribute.needsUpdate = false;
+  particles.sizeAttribute.needsUpdate = false;
+  particles.update(2.0); // Lifetime expires in this frame
+  assert.equal(particles.activeCount, 0);
+  assert.equal(particles.positionAttribute.needsUpdate, true, 'Must mark buffers for update one final frame to clear particles');
+  assert.equal(particles.colorAttribute.needsUpdate, true);
+  assert.equal(particles.sizeAttribute.needsUpdate, true);
+
+  // Frame 4: Next idle frame (activeCount === 0 and wasActiveLastFrame === false)
+  particles.positionAttribute.needsUpdate = false;
+  particles.colorAttribute.needsUpdate = false;
+  particles.sizeAttribute.needsUpdate = false;
+  particles.update(0.016);
+  assert.equal(particles.positionAttribute.needsUpdate, false, 'Must not mark buffers for update on subsequent idle frames');
+  assert.equal(particles.colorAttribute.needsUpdate, false);
+  assert.equal(particles.sizeAttribute.needsUpdate, false);
 });
 
 test('ParticleSystem handles pool saturation cleanly without exceeding capacity', () => {
@@ -506,6 +574,28 @@ test('Environment.create builds synthwave sky, lighting, fog, sun, wireframe mou
   assert.ok(typeof env.sun.group.scale.y === 'number');
 });
 
+test('Environment.update orients sun facing camera yaw, and dispose clears scene.fog', () => {
+  const THREE = createMockThree();
+  const scene = new THREE.Scene();
+  const env = Environment.create(scene, { THREE });
+
+  assert.ok(scene.fog, 'Scene fog should be configured initially');
+
+  const camera = new THREE.Object3D();
+  camera.position.set(200, 10, 500);
+
+  env.update(1.0, 0.016, camera);
+
+  const dx = camera.position.x - env.sun.group.position.x;
+  const dz = camera.position.z - env.sun.group.position.z;
+  const expectedYaw = Math.atan2(dx, dz);
+  assert.ok(Math.abs(env.sun.group.rotation.y - expectedYaw) < 1e-5, 'Sun rotation.y should match camera yaw');
+
+  // Dispose should remove group and clear scene.fog
+  env.dispose();
+  assert.equal(scene.fog, null, 'Environment.dispose must set scene.fog to null');
+});
+
 test('Environment and ParticleSystem handle clean disposal without errors', () => {
   const THREE = createMockThree();
   const scene = new THREE.Scene();
@@ -517,4 +607,6 @@ test('Environment and ParticleSystem handle clean disposal without errors', () =
     particles.dispose();
     env.dispose();
   }, 'Disposal of environment and particles must not throw');
+
+  assert.equal(scene.fog, null, 'Scene fog must be cleared upon disposal');
 });

@@ -79,14 +79,30 @@ export class ParticleSystem {
     this.freeCount = this.maxParticles;
     this.activeCount = 0;
     this.lastAllocatedIndex = -1;
+    this.wasActiveLastFrame = false;
 
     // ---------------------------------------------------------
     // Three.js Point Cloud Mesh Setup
     // ---------------------------------------------------------
+    this._createPointsObject();
+
+    // ---------------------------------------------------------
+    // Speed Streak Lines Subsystem
+    // ---------------------------------------------------------
+    this._initSpeedLines();
+  }
+
+  /**
+   * Initializes Three.js Point Cloud mesh and custom vertex shader hook
+   * @private
+   */
+  _createPointsObject() {
     this.geometry = new this.THREE.BufferGeometry();
     this.posAttribute = new this.THREE.BufferAttribute(this.positions, 3);
     this.colAttribute = new this.THREE.BufferAttribute(this.colors, 3);
     this.sizeAttribute = new this.THREE.BufferAttribute(this.sizes, 1);
+    this.positionAttribute = this.posAttribute;
+    this.colorAttribute = this.colAttribute;
 
     this.geometry.setAttribute('position', this.posAttribute);
     this.geometry.setAttribute('color', this.colAttribute);
@@ -105,6 +121,13 @@ export class ParticleSystem {
       sizeAttenuation: true
     });
 
+    this.material.onBeforeCompile = (shader) => {
+      shader.vertexShader = 'attribute float size;\n' + shader.vertexShader.replace(
+        'gl_PointSize = size;',
+        'gl_PointSize = size * ( 300.0 / - mvPosition.z );'
+      );
+    };
+
     this.pointsMesh = new this.THREE.Points(this.geometry, this.material);
     this.pointsMesh.name = 'ParticleSystem_Points';
     this.pointsMesh.frustumCulled = false; // Prevent unwanted frustum culling when car speeds forward
@@ -112,11 +135,6 @@ export class ParticleSystem {
     if (this.scene && typeof this.scene.add === 'function') {
       this.scene.add(this.pointsMesh);
     }
-
-    // ---------------------------------------------------------
-    // Speed Streak Lines Subsystem
-    // ---------------------------------------------------------
-    this._initSpeedLines();
   }
 
   /**
@@ -525,12 +543,11 @@ export class ParticleSystem {
   }
 
   /**
-   * Convenience alias matching task brief specification: emitSpeedLines(camPos, active)
-   * @param {{x: number, y: number, z: number}} camPos
-   * @param {boolean} active
+   * Convenience alias forwarding all arguments to updateSpeedLines
+   * @param {...*} args
    */
-  emitSpeedLines(camPos, active) {
-    this.updateSpeedLines(camPos, active);
+  emitSpeedLines(...args) {
+    this.updateSpeedLines(...args);
   }
 
   /**
@@ -540,6 +557,8 @@ export class ParticleSystem {
   update(dt) {
     if (dt <= 0) return;
     const clampedDt = Math.min(dt, 0.1);
+
+    const hadActiveParticles = this.wasActiveLastFrame || false;
 
     for (let i = 0; i < this.maxParticles; i++) {
       if (!this.active[i]) continue;
@@ -580,10 +599,17 @@ export class ParticleSystem {
       this.colors[i * 3 + 2] = b * alpha;
     }
 
-    // Mark attributes for GPU update
-    if (this.posAttribute) this.posAttribute.needsUpdate = true;
-    if (this.colAttribute) this.colAttribute.needsUpdate = true;
-    if (this.sizeAttribute) this.sizeAttribute.needsUpdate = true;
+    // Mark attributes for GPU update only if active particles exist or were active in previous frame
+    const needsBufferUpdate = this.activeCount > 0 || hadActiveParticles;
+    if (needsBufferUpdate) {
+      if (this.positionAttribute) this.positionAttribute.needsUpdate = true;
+      if (this.posAttribute && this.posAttribute !== this.positionAttribute) this.posAttribute.needsUpdate = true;
+      if (this.colorAttribute) this.colorAttribute.needsUpdate = true;
+      if (this.colAttribute && this.colAttribute !== this.colorAttribute) this.colAttribute.needsUpdate = true;
+      if (this.sizeAttribute) this.sizeAttribute.needsUpdate = true;
+    }
+
+    this.wasActiveLastFrame = this.activeCount > 0;
   }
 
   /**
