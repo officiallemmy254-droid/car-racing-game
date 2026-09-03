@@ -351,6 +351,25 @@ export class Environment {
     const geometry = new THREE.BufferGeometry();
     if (THREE.BufferAttribute) {
       geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+
+      const indices = new Uint16Array(segments * 6);
+      for (let i = 0; i < segments; i++) {
+        const b0 = i * 2;
+        const t0 = i * 2 + 1;
+        const b1 = (i + 1) * 2;
+        const t1 = (i + 1) * 2 + 1;
+
+        const idx = i * 6;
+        indices[idx + 0] = b0;
+        indices[idx + 1] = t0;
+        indices[idx + 2] = t1;
+        indices[idx + 3] = b0;
+        indices[idx + 4] = t1;
+        indices[idx + 5] = b1;
+      }
+      if (typeof geometry.setIndex === 'function') {
+        geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+      }
     }
 
     const material = new THREE.MeshBasicMaterial({

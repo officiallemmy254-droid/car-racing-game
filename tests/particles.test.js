@@ -168,6 +168,13 @@ function createMockThree() {
       this.attributes[name] = attribute;
       return this;
     }
+    setIndex(index) {
+      this.index = index;
+      return this;
+    }
+    getIndex() {
+      return this.index;
+    }
     getAttribute(name) {
       return this.attributes[name];
     }
