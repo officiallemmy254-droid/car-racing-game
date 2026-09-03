@@ -78,6 +78,22 @@ test('InputState maps keys to driving actions', () => {
   assert.equal(input.nitro, false);
 });
 
+test('InputState normalizes space key string " " and KeyboardEvent key=" " for drift', () => {
+  const input = new InputState();
+
+  // Test handleKeyDown(' ') and handleKeyUp(' ')
+  input.handleKeyDown(' ');
+  assert.equal(input.drift, true);
+  input.handleKeyUp(' ');
+  assert.equal(input.drift, false);
+
+  // Test event object with key === ' '
+  input.handleKeyDown({ key: ' ' });
+  assert.equal(input.drift, true);
+  input.handleKeyUp({ key: ' ' });
+  assert.equal(input.drift, false);
+});
+
 test('InputState handles Arrow keys, reverse/brake, and steering', () => {
   const input = new InputState();
 
@@ -207,6 +223,144 @@ test('InputManager provides input state and handles lifecycle gracefully in Node
 
   // dispose cleans up without errors
   manager.dispose();
+});
+
+test('InputManager handles touch steering overlap and clears button active classes on blur', () => {
+  const elements = new Map();
+  const makeElement = (id, tag = 'div') => {
+    const classListSet = new Set();
+    const listeners = {};
+    const el = {
+      id,
+      tagName: tag.toUpperCase(),
+      classList: {
+        add(c) { classListSet.add(c); },
+        remove(c) { classListSet.delete(c); },
+        contains(c) { return classListSet.has(c); }
+      },
+      addEventListener(evt, fn) {
+        listeners[evt] = listeners[evt] || [];
+        listeners[evt].push(fn);
+      },
+      removeEventListener(evt, fn) {
+        if (listeners[evt]) {
+          listeners[evt] = listeners[evt].filter((f) => f !== fn);
+        }
+      },
+      trigger(evt) {
+        (listeners[evt] || []).forEach((fn) => fn({ preventDefault() {} }));
+      },
+      querySelector(selector) {
+        const targetId = selector.replace('#', '');
+        return elements.get(targetId) || null;
+      },
+      querySelectorAll(selector) {
+        const matched = [];
+        for (const child of elements.values()) {
+          if (selector.includes('active') && child.classList.contains('active')) {
+            matched.push(child);
+          } else if (selector.includes('button') && child.tagName === 'BUTTON') {
+            matched.push(child);
+          }
+        }
+        return matched;
+      },
+      appendChild(child) {},
+      removeChild(child) {}
+    };
+    if (id) elements.set(id, el);
+    return el;
+  };
+
+  const btnLeft = makeElement('touch-steer-left', 'button');
+  const btnRight = makeElement('touch-steer-right', 'button');
+  const btnGas = makeElement('touch-gas', 'button');
+  const btnBrake = makeElement('touch-brake', 'button');
+  const btnNitro = makeElement('touch-nitro', 'button');
+  const btnDrift = makeElement('touch-drift', 'button');
+  const btnCam = makeElement('touch-cam', 'button');
+  const btnReset = makeElement('touch-reset', 'button');
+
+  const container = makeElement('touch-controls', 'div');
+  const domRoot = makeElement('game-container', 'div');
+
+  const origWindow = globalThis.window;
+  const origDocument = globalThis.document;
+
+  const windowListeners = {};
+  globalThis.window = {
+    addEventListener(evt, fn) {
+      windowListeners[evt] = windowListeners[evt] || [];
+      windowListeners[evt].push(fn);
+    },
+    removeEventListener(evt, fn) {
+      if (windowListeners[evt]) {
+        windowListeners[evt] = windowListeners[evt].filter((f) => f !== fn);
+      }
+    }
+  };
+
+  globalThis.document = {
+    createElement(tag) {
+      return tag === 'div' ? container : makeElement('', tag);
+    },
+    getElementById(id) {
+      return elements.get(id) || null;
+    },
+    querySelectorAll(selector) {
+      return container.querySelectorAll(selector);
+    },
+    body: domRoot
+  };
+
+  try {
+    const manager = new InputManager({ enableTouch: true, domElement: domRoot });
+
+    // Initial steer is 0
+    assert.equal(manager.getInputState().steer, 0);
+
+    // Left touchstart -> steer = -1, btnLeft active
+    btnLeft.trigger('touchstart');
+    assert.equal(manager.getInputState().steer, -1);
+    assert.equal(btnLeft.classList.contains('active'), true);
+
+    // Right touchstart while left still pressed -> steer = 0, both active
+    btnRight.trigger('touchstart');
+    assert.equal(manager.getInputState().steer, 0);
+    assert.equal(btnRight.classList.contains('active'), true);
+
+    // Left touchend -> steer = +1 (right remains pressed)
+    btnLeft.trigger('touchend');
+    assert.equal(manager.getInputState().steer, 1);
+    assert.equal(btnLeft.classList.contains('active'), false);
+    assert.equal(btnRight.classList.contains('active'), true);
+
+    // Right touchcancel -> steer = 0
+    btnRight.trigger('touchcancel');
+    assert.equal(manager.getInputState().steer, 0);
+    assert.equal(btnRight.classList.contains('active'), false);
+
+    // Re-press right and drift, then test onBlur
+    btnRight.trigger('touchstart');
+    btnDrift.trigger('touchstart');
+    assert.equal(btnRight.classList.contains('active'), true);
+    assert.equal(btnDrift.classList.contains('active'), true);
+
+    // Trigger blur on window
+    const blurHandlers = windowListeners['blur'] || [];
+    blurHandlers.forEach((fn) => fn());
+
+    // Both buttons must have .active removed and steer reset to 0
+    assert.equal(btnRight.classList.contains('active'), false);
+    assert.equal(btnDrift.classList.contains('active'), false);
+    assert.equal(manager.getInputState().steer, 0);
+    assert.equal(manager.getInputState().drift, false);
+
+    manager.dispose();
+  } finally {
+    globalThis.window = origWindow;
+    globalThis.document = origDocument;
+  }
 });
 
 // ------------------------------------------------------------

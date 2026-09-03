@@ -34,6 +34,7 @@ export class InputState {
   _normalizeCode(raw) {
     if (!raw) return '';
     const val = typeof raw === 'string' ? raw : (raw.code || raw.key || '');
+    if (val === ' ') return 'Space';
     return val.trim();
   }
 
@@ -251,6 +252,8 @@ export class InputManager {
     this.options = options;
     this.state = new InputState();
     this.touchContainer = null;
+    this._touchSteerLeft = false;
+    this._touchSteerRight = false;
     this._listeners = [];
 
     if (typeof window !== 'undefined') {
@@ -286,7 +289,7 @@ export class InputManager {
   _initKeyboardListeners() {
     const onKeyDown = (e) => {
       // Prevent scrolling on Space / Arrow keys during gameplay
-      if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
+      if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code) || e.key === ' ') {
         e.preventDefault();
       }
       this.state.handleKeyDown(e);
@@ -298,6 +301,13 @@ export class InputManager {
 
     const onBlur = () => {
       this.state.resetAll();
+      this._touchSteerLeft = false;
+      this._touchSteerRight = false;
+      const touchContainer = this.touchContainer || (typeof document !== 'undefined' ? document.getElementById('touch-controls') : null);
+      if (touchContainer) {
+        const buttons = touchContainer.querySelectorAll('button, .active');
+        buttons.forEach((btn) => btn.classList.remove('active'));
+      }
     };
 
     window.addEventListener('keydown', onKeyDown);
@@ -317,6 +327,9 @@ export class InputManager {
    */
   _initTouchControls(targetElement) {
     if (typeof document === 'undefined') return;
+
+    this._touchSteerLeft = false;
+    this._touchSteerRight = false;
 
     const parent = targetElement || document.getElementById('game-container') || document.body;
 
@@ -444,8 +457,36 @@ export class InputManager {
     // Bind buttons
     bindTouchAction('#touch-gas', () => this.state.setThrottle(1), () => this.state.setThrottle(0));
     bindTouchAction('#touch-brake', () => this.state.setBrake(1), () => this.state.setBrake(0));
-    bindTouchAction('#touch-steer-left', () => this.state.setSteer(-1), () => this.state.setSteer(0));
-    bindTouchAction('#touch-steer-right', () => this.state.setSteer(1), () => this.state.setSteer(0));
+
+    const updateSteer = () => {
+      const steerVal = (this._touchSteerRight ? 1 : 0) - (this._touchSteerLeft ? 1 : 0);
+      this.state.setSteer(steerVal);
+    };
+
+    bindTouchAction(
+      '#touch-steer-left',
+      () => {
+        this._touchSteerLeft = true;
+        updateSteer();
+      },
+      () => {
+        this._touchSteerLeft = false;
+        updateSteer();
+      }
+    );
+
+    bindTouchAction(
+      '#touch-steer-right',
+      () => {
+        this._touchSteerRight = true;
+        updateSteer();
+      },
+      () => {
+        this._touchSteerRight = false;
+        updateSteer();
+      }
+    );
+
     bindTouchAction('#touch-nitro', () => this.state.setNitro(true), () => this.state.setNitro(false));
     bindTouchAction('#touch-drift', () => this.state.setDrift(true), () => this.state.setDrift(false));
 
