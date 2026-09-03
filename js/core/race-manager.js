@@ -228,6 +228,10 @@ export class RaceManager {
       this.lapTime = 0.0;
     }
 
+    if (this.playerCar) {
+      this.playerCar.currentLap = this.currentLap;
+    }
+
     return true;
   }
 
@@ -241,10 +245,6 @@ export class RaceManager {
   update(dt = 1 / 60, playerCar = null, aiCars = null, track = null) {
     if (playerCar) {
       this.playerCar = playerCar;
-      if (typeof playerCar.currentLap === 'number' && playerCar.currentLap > this.currentLap) {
-        this.currentLap = playerCar.currentLap;
-        this.checkpoints.currentLap = playerCar.currentLap;
-      }
     }
     if (aiCars) this.aiCars = aiCars;
     if (track) this.track = track;
@@ -357,7 +357,14 @@ export class RaceManager {
     if (!playerCar || !Array.isArray(aiCars) || aiCars.length === 0) {
       this.isDrafting = false;
       this.draftingTimer = 0.0;
-      if (playerCar) playerCar.isDrafting = false;
+      if (playerCar) {
+        playerCar.isDrafting = false;
+        if (typeof playerCar.setDrafting === 'function') {
+          playerCar.setDrafting(false);
+        } else if (playerCar.physics) {
+          playerCar.physics.isDrafting = false;
+        }
+      }
       return;
     }
 
@@ -382,6 +389,11 @@ export class RaceManager {
 
     if (playerCar) {
       playerCar.isDrafting = this.isDrafting;
+      if (typeof playerCar.setDrafting === 'function') {
+        playerCar.setDrafting(this.isDrafting);
+      } else if (playerCar.physics) {
+        playerCar.physics.isDrafting = this.isDrafting;
+      }
     }
   }
 
@@ -398,9 +410,13 @@ export class RaceManager {
     const ry = rival.position?.y ?? rival.logic?.position?.y ?? 0;
     const rz = rival.position?.z ?? rival.logic?.position?.z;
 
-    // 1. Check 3D relative positioning
-    if (typeof px === 'number' && typeof pz === 'number' &&
-        typeof rx === 'number' && typeof rz === 'number') {
+    const has3D = (
+      typeof px === 'number' && typeof pz === 'number' &&
+      typeof rx === 'number' && typeof rz === 'number'
+    );
+
+    // 1. Check 3D relative positioning - do not fall through to 1D checks when 3D exists
+    if (has3D) {
       const dx = rx - px;
       const dy = ry - py;
       const dz = rz - pz;
@@ -415,11 +431,10 @@ export class RaceManager {
         const forwardDist = dx * fx + dz * fz;
         const lateralDist = Math.abs(-dx * fz + dz * fx);
 
-        // Rival is ahead of player (forwardDist > 0) within slipstream corridor
-        if (forwardDist > 0 && (lateralDist <= 5.0 || (forwardDist / dist) > 0.5)) {
-          return true;
-        }
+        // Narrow draft cone: must be ahead (forwardDist > 0), lateralDist <= 3.0, and forwardDist / dist > 0.85
+        return forwardDist > 0 && lateralDist <= 3.0 && (forwardDist / dist) > 0.85;
       }
+      return false;
     }
 
     // 2. Fallback check by distance traveled along track
@@ -427,9 +442,7 @@ export class RaceManager {
     const rDist = rival.distanceTraveled ?? rival.distance ?? rival.logic?.distanceTraveled;
     if (typeof pDist === 'number' && typeof rDist === 'number') {
       const diff = rDist - pDist;
-      if (diff > 0.1 && diff <= 18.0) {
-        return true;
-      }
+      return diff > 0.1 && diff <= 18.0;
     }
 
     // 3. Fallback check by spline progress
@@ -439,10 +452,9 @@ export class RaceManager {
     if (typeof pProg === 'number' && typeof rProg === 'number' && tLen > 0) {
       let diff = rProg - pProg;
       if (diff < -0.5) diff += 1.0;
+      if (diff > 0.5) diff -= 1.0;
       const distM = diff * tLen;
-      if (distM > 0.1 && distM <= 18.0) {
-        return true;
-      }
+      return distM > 0.1 && distM <= 18.0;
     }
 
     return false;
@@ -464,7 +476,7 @@ export class RaceManager {
         drivers.push({
           id: this.playerCar.id || 'player',
           name: this.playerCar.name || 'Player',
-          lap: this.playerCar.currentLap ?? this.playerCar.lap ?? this.currentLap ?? 1,
+          lap: this.currentLap,
           splineProgress: this.playerCar.splineProgress ?? this.playerCar.physics?.splineProgress ?? 0,
           isPlayer: true,
           speed: this.playerCar.speed ?? this.playerCar.physics?.speed ?? 0,
@@ -507,7 +519,15 @@ export class RaceManager {
 
     const totalDistanceTarget = this.totalLaps * this.trackLength;
     const leaderDistance = standings[0].totalDistance;
-    const leaderTime = this.totalTime;
+
+    let leaderTime = this.totalTime;
+    if (!standings[0].isPlayer) {
+      const playerDriver = standings.find(d => d.isPlayer);
+      const playerDist = playerDriver?.totalDistance ?? (this.currentLap * this.trackLength);
+      const distAheadOfPlayer = Math.max(0, leaderDistance - playerDist);
+      const leaderSpeed = Math.max(20, standings[0].speed || 48);
+      leaderTime = Math.max(1, this.totalTime - (distAheadOfPlayer / leaderSpeed));
+    }
 
     return standings.map((driver, index) => {
       let driverTotalTime;
@@ -564,6 +584,15 @@ export class RaceManager {
     this.aiFinishTimes.clear();
     this.aiBestLaps.clear();
     this._prevPlayerProgress = undefined;
+    if (this.playerCar) {
+      this.playerCar.currentLap = 1;
+      this.playerCar.isDrafting = false;
+      if (typeof this.playerCar.setDrafting === 'function') {
+        this.playerCar.setDrafting(false);
+      } else if (this.playerCar.physics) {
+        this.playerCar.physics.isDrafting = false;
+      }
+    }
   }
 
   // ==========================================================================

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { StandingsCalculator, CheckpointTracker, RaceManager } from '../js/core/race-manager.js';
 import { TrackMath } from '../js/world/track-math.js';
+import { VehiclePhysics, PHYSICS_CONSTANTS } from '../js/entities/player-car.js';
 
 // ============================================================================
 // 1. StandingsCalculator Tests
@@ -309,6 +310,7 @@ test('RaceManager clears drafting when rival pulls away or is behind player', ()
 
 test('RaceManager getStandings returns player rank and ordered standings for 6 drivers', () => {
   const raceManager = new RaceManager({ totalLaps: 3, trackLength: 1000 });
+  raceManager.currentLap = 2;
 
   const playerCar = {
     id: 'player',
@@ -353,6 +355,7 @@ test('RaceManager getStandings returns player rank and ordered standings for 6 d
 
 test('RaceManager getLeaderboard returns structured finish results with formatted times and gaps', () => {
   const raceManager = new RaceManager({ totalLaps: 3, trackLength: 1000 });
+  raceManager.currentLap = 3;
 
   const playerCar = {
     id: 'player',
@@ -457,6 +460,7 @@ test('RaceManager auto-tracks checkpoints and advances lap with real TrackMath a
 
 test('RaceManager handles AI leader and displays positive gap for trailing player in getLeaderboard', () => {
   const raceManager = new RaceManager({ totalLaps: 3, trackLength: 1000 });
+  raceManager.currentLap = 3;
 
   const playerCar = {
     id: 'player',
@@ -485,11 +489,18 @@ test('RaceManager handles AI leader and displays positive gap for trailing playe
   assert.equal(leaderboard[0].id, 'ai1');
   assert.equal(leaderboard[0].rank, 1);
   assert.equal(leaderboard[0].gap, 'LEADER');
+  assert.ok(
+    leaderboard[0].totalTime < leaderboard[1].totalTime,
+    `AI leader total time (${leaderboard[0].totalTime}) must be faster than player (${leaderboard[1].totalTime})`
+  );
 
   // Player is 2nd
   assert.equal(leaderboard[1].id, 'player');
   assert.equal(leaderboard[1].rank, 2);
+  assert.equal(leaderboard[1].totalTime, raceManager.totalTime);
   assert.ok(leaderboard[1].gap.startsWith('+'), 'Trailing player gap must start with +');
+  // distAhead = 2980 - 2900 = 80m. speed = 50. timeDiff = 1.6s.
+  assert.equal(leaderboard[1].gap, '+1.60s');
 });
 
 test('CheckpointTracker enforces anti-cheat when car skips halfway across track', () => {
@@ -508,5 +519,180 @@ test('CheckpointTracker enforces anti-cheat when car skips halfway across track'
   // Finish line cross attempt fails
   assert.equal(tracker.completeLap(), false, 'Lap completion must be rejected without all checkpoints');
   assert.equal(tracker.currentLap, 1);
+});
+
+// ============================================================================
+// 6. Review Bug Fixes & Anti-Cheat Validation Tests
+// ============================================================================
+
+test('RaceManager connects drafting directly to VehiclePhysics and awards top speed boost', () => {
+  const raceManager = new RaceManager({ totalLaps: 3, trackLength: 1000 });
+  const physics = new VehiclePhysics();
+
+  // Bring car up to normal top speed
+  physics.speed = PHYSICS_CONSTANTS.MAX_SPEED_NORMAL;
+
+  const playerCar = {
+    physics,
+    position: { x: 0, y: 0, z: 100 },
+    heading: 0,
+    speed: physics.speed
+  };
+
+  // Rival 10m directly ahead
+  const rivalCar = {
+    id: 'ai1',
+    position: { x: 0, y: 0, z: 110 },
+    speed: 55
+  };
+
+  // Advance by 1.1 seconds so drafting triggers
+  for (let i = 0; i < 66; i++) {
+    raceManager.update(1 / 60, playerCar, [rivalCar]);
+  }
+
+  assert.equal(raceManager.isDrafting, true);
+  assert.equal(playerCar.isDrafting, true);
+  assert.equal(playerCar.physics.isDrafting, true, 'playerCar.physics.isDrafting must be true');
+
+  // Accelerate with full throttle while drafting - speed should exceed MAX_SPEED_NORMAL
+  for (let i = 0; i < 30; i++) {
+    physics.step({ throttle: 1 }, 1 / 60);
+  }
+  assert.ok(
+    physics.speed > PHYSICS_CONSTANTS.MAX_SPEED_NORMAL,
+    `VehiclePhysics speed (${physics.speed}) must exceed normal top speed (${PHYSICS_CONSTANTS.MAX_SPEED_NORMAL}) under drafting boost`
+  );
+
+  // When rival pulls away, drafting clears on physics as well
+  rivalCar.position.z = 200;
+  raceManager.update(1 / 60, playerCar, [rivalCar]);
+  assert.equal(raceManager.isDrafting, false);
+  assert.equal(playerCar.physics.isDrafting, false, 'playerCar.physics.isDrafting must clear when rival pulls away');
+});
+
+test('RaceManager routes drafting through playerCar.setDrafting if method is available', () => {
+  const raceManager = new RaceManager({ totalLaps: 3, trackLength: 1000 });
+  let draftingCalls = [];
+
+  const playerCar = {
+    position: { x: 0, y: 0, z: 100 },
+    heading: 0,
+    speed: 45,
+    setDrafting(isDrafting) {
+      draftingCalls.push(isDrafting);
+    }
+  };
+
+  const rivalCar = {
+    id: 'ai1',
+    position: { x: 0, y: 0, z: 110 },
+    speed: 50
+  };
+
+  for (let i = 0; i < 66; i++) {
+    raceManager.update(1 / 60, playerCar, [rivalCar]);
+  }
+
+  assert.equal(raceManager.isDrafting, true);
+  assert.ok(draftingCalls.includes(true), 'setDrafting must have been called with true');
+});
+
+test('External manipulation of playerCar.currentLap does not bypass RaceManager checkpoint validation', () => {
+  const raceManager = new RaceManager({ totalLaps: 3, trackLength: 1000 });
+  assert.equal(raceManager.currentLap, 1);
+
+  const playerCar = {
+    id: 'player',
+    currentLap: 1,
+    splineProgress: 0.1,
+    position: { x: 0, y: 0, z: 0 },
+    heading: 0
+  };
+
+  // Maliciously set playerCar.currentLap to 3 (or 99)
+  playerCar.currentLap = 3;
+
+  // Run update ticks
+  raceManager.update(1 / 60, playerCar, []);
+
+  // RaceManager must remain authoritative on lap 1
+  assert.equal(raceManager.currentLap, 1, 'RaceManager currentLap must remain 1');
+  assert.equal(raceManager.checkpoints.currentLap, 1, 'CheckpointTracker currentLap must remain 1');
+  assert.equal(raceManager.isFinished, false, 'Race must not be marked finished');
+
+  // Attempting to complete lap without checkpoints must fail
+  const completed = raceManager.completeLap();
+  assert.equal(completed, false, 'completeLap must return false when checkpoints are not hit');
+  assert.equal(raceManager.currentLap, 1);
+
+  // Standings must calculate player distance from RaceManager.currentLap (lap 1), not hacked lap 3
+  const standings = raceManager.getStandings();
+  const player = standings.standings.find(d => d.isPlayer);
+  assert.equal(player.lap, 1, 'Standings must report lap 1 for player');
+  assert.equal(player.totalDistance, 100, 'Distance should be based on lap 1 (0 * 1000 + 0.1 * 1000 = 100)');
+});
+
+test('_isBehindRival enforces 3D bounds and does not fall through to 1D checks', () => {
+  const raceManager = new RaceManager({ totalLaps: 3, trackLength: 1000 });
+
+  const player = {
+    position: { x: 0, y: 0, z: 100 },
+    heading: 0, // forward is +Z
+    splineProgress: 0.10
+  };
+
+  // Case A: Rival is within 18m Euclidean dist, but lateral offset is 4.0m (> 3.0m threshold)
+  const wideRival = {
+    position: { x: 4.0, y: 0, z: 110 },
+    splineProgress: 0.11 // spline difference ~10m would have passed 1D check!
+  };
+  assert.equal(
+    raceManager._isBehindRival(player, wideRival),
+    false,
+    'Rival with lateral distance 4.0m must be rejected and must NOT fall through to spline check'
+  );
+
+  // Case B: Rival is within 18m Euclidean dist, but forwardDist / dist <= 0.85 (angle too wide)
+  const angleRival = {
+    position: { x: 2.5, y: 0, z: 102 }, // dist ~ 3.2m, forwardDist = 2, forwardDist/dist = 0.625 <= 0.85
+    splineProgress: 0.102
+  };
+  assert.equal(
+    raceManager._isBehindRival(player, angleRival),
+    false,
+    'Rival outside cone alignment (> 0.85) must be rejected'
+  );
+
+  // Case C: Rival is behind player in 3D (z = 90) but has higher splineProgress
+  const behindRival = {
+    position: { x: 0, y: 0, z: 90 },
+    splineProgress: 0.11
+  };
+  assert.equal(
+    raceManager._isBehindRival(player, behindRival),
+    false,
+    'Rival physically behind player in 3D must be rejected and not fall through'
+  );
+
+  // Case D: Rival is directly ahead within cone: dx = 0, dz = 12, lateralDist = 0, forward/dist = 1.0
+  const alignedRival = {
+    position: { x: 0, y: 0, z: 112 },
+    splineProgress: 0.112
+  };
+  assert.equal(
+    raceManager._isBehindRival(player, alignedRival),
+    true,
+    'Rival directly ahead within cone must be accepted'
+  );
+
+  // Case E: Pure 1D fallback when 3D coordinates are absent
+  const player1D = { splineProgress: 0.10 };
+  const rival1D = { splineProgress: 0.11 };
+  assert.equal(
+    raceManager._isBehindRival(player1D, rival1D),
+    true,
+    'Fallback to spline progress when 3D coordinates are absent'
+  );
 });
 
