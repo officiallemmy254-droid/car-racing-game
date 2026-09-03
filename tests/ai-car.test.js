@@ -355,9 +355,146 @@ test('AICar Three.js wrapper creates rival mesh, updates position, rotation, whe
   const wheel = aiCar.mesh.userData.wheels[0];
   assert.ok(wheel.rotation.x !== 0, 'Wheels must rotate with movement');
 
-  // Brake lights function
-  aiCar.logic.isBraking = true;
-  aiCar.update(1/60, track, playerPos, 100);
+  // Brake lights function: obstacle within 10m triggers braking and taillight flare
+  const obstacleAhead = {
+    distanceTraveled: aiCar.distanceTraveled + 6, // 6m ahead (< 10m)
+    laneOffset: aiCar.laneOffset,
+    speed: 15
+  };
+  aiCar.update(1/60, track, playerPos, 100, [obstacleAhead]);
+  assert.equal(aiCar.isBraking, true, 'isBraking must be true when obstacle is within 10m');
   const brakeLight = aiCar.mesh.userData.brakeLights[0];
   assert.equal(brakeLight.material.emissiveIntensity, 2.5, 'Brake light must flare when AI brakes');
+
+  // Once obstacle clears, isBraking returns to false and brake lights turn off (0.4)
+  aiCar.update(1/60, track, playerPos, 100, []);
+  assert.equal(aiCar.isBraking, false, 'isBraking must return to false when obstacle clears');
+  assert.equal(brakeLight.material.emissiveIntensity, 0.4, 'Brake light must return to idle intensity (0.4)');
+});
+
+test('AICarLogic activates isBraking with obstacle within 10m and automatically deactivates when clear', () => {
+  const ai = new AICarLogic({ name: 'Apex Nova', baseSpeed: 48, laneOffset: 0 });
+  const trackLength = 1000;
+  ai.distanceTraveled = 200;
+  ai.laneOffset = 0;
+
+  // Obstacle ahead at 208m (8m ahead, within 10m in same lane)
+  const obstacle = {
+    distanceTraveled: 208,
+    laneOffset: 0,
+    speed: 20
+  };
+
+  ai.update(1/60, trackLength, 200, [obstacle]);
+  assert.equal(ai.isBraking, true, 'isBraking should activate with obstacle within 10m');
+
+  // Next frame: obstacle is removed / clear track
+  ai.update(1/60, trackLength, 200, []);
+  assert.equal(ai.isBraking, false, 'isBraking must return to false on next frame when track clears');
+});
+
+test('AICarLogic returns to preferred lane on clear track', () => {
+  // Pulse Fury preferredLaneOffset is 0.0
+  const ai = new AICarLogic({ name: 'Pulse Fury', baseSpeed: 46, laneOffset: 5.0 });
+  const trackLength = 1000;
+  assert.equal(ai.preferredLaneOffset, 0.0);
+  assert.equal(ai.laneOffset, 5.0);
+
+  // When track is clear, targetLaneOffset immediately relaxes to preferredLaneOffset
+  ai.update(1/60, trackLength, 0, []);
+  assert.equal(ai.targetLaneOffset, ai.preferredLaneOffset, 'targetLaneOffset must relax to preferredLaneOffset');
+
+  // Over time, laneOffset smoothly shifts back towards 0.0
+  for (let i = 0; i < 90; i++) {
+    ai.update(1/60, trackLength, 0, []);
+  }
+  assert.ok(Math.abs(ai.laneOffset - 0.0) < 0.2, `laneOffset should have returned near 0.0, got ${ai.laneOffset}`);
+});
+
+test('AICarLogic enforces nitro cooldown and dt-scaled probability', () => {
+  const ai = new AICarLogic({ name: 'Apex Nova', baseSpeed: 48 });
+  const trackLength = 1000;
+  ai.distanceTraveled = 100;
+  assert.equal(ai.boostCooldown, 0);
+
+  // Force nitro trigger by setting Math.random to return 0
+  const originalRandom = Math.random;
+  Math.random = () => 0; // guaranteed trigger when conditions met
+
+  try {
+    // playerDiff = 300 - 100 = 200 (> 120)
+    ai.update(1/60, trackLength, 300);
+    assert.equal(ai.isBoosting, true, 'Should trigger boost');
+    assert.ok(ai.boostTimer > 1.9 && ai.boostTimer <= 2.0, `Boost timer should be ~2.0s minus dt, got ${ai.boostTimer}`);
+    assert.ok(ai.boostCooldown > 5.9, `Boost cooldown should be set to 6.0s, got ${ai.boostCooldown}`);
+
+    // Immediately after, even if player leads, nitro cannot trigger again due to cooldown & timer
+    ai.isBoosting = false;
+    ai.boostTimer = 0;
+    // boostCooldown is still ~5.9s
+    ai.update(1/60, trackLength, 300);
+    assert.equal(ai.isBoosting, false, 'Should not trigger boost while on cooldown');
+
+    // Simulate cooldown countdown
+    for (let i = 0; i < 365; i++) {
+      ai.update(1/60, trackLength, 100);
+    }
+    assert.ok(ai.boostCooldown <= 0, 'Boost cooldown should expire after 6 seconds');
+  } finally {
+    Math.random = originalRandom;
+  }
+});
+
+test('AICar sets correct pitch orientation on incline (nose up) and decline (nose down)', () => {
+  const mockThree = createMockThree();
+  const mockTrackUphill = {
+    totalLength: 1000,
+    getSplinePoint: () => ({ x: 0, y: 10, z: 100 }),
+    getSplineTangent: () => ({ x: 0, y: 0.3, z: 0.954 }), // uphill: positive tangent.y
+    getNormalAt: () => ({ x: 1, y: 0, z: 0 })
+  };
+
+  const aiUphill = new AICar({
+    three: mockThree,
+    track: mockTrackUphill,
+    initialDistance: 100
+  });
+  aiUphill.update(1/60, mockTrackUphill, null, 100);
+  assert.ok(aiUphill.mesh.rotation.x < 0, `Positive tangent.y (uphill) must produce negative pitch (-X rotation), got ${aiUphill.mesh.rotation.x}`);
+
+  const mockTrackDownhill = {
+    totalLength: 1000,
+    getSplinePoint: () => ({ x: 0, y: 10, z: 100 }),
+    getSplineTangent: () => ({ x: 0, y: -0.3, z: 0.954 }), // downhill: negative tangent.y
+    getNormalAt: () => ({ x: 1, y: 0, z: 0 })
+  };
+
+  const aiDownhill = new AICar({
+    three: mockThree,
+    track: mockTrackDownhill,
+    initialDistance: 100
+  });
+  aiDownhill.update(1/60, mockTrackDownhill, null, 100);
+  assert.ok(aiDownhill.mesh.rotation.x > 0, `Negative tangent.y (downhill) must produce positive pitch (+X rotation), got ${aiDownhill.mesh.rotation.x}`);
+});
+
+test('AICarLogic and AICar handle null playerPosition and negative distance cleanly', () => {
+  const ai = new AICarLogic({ name: 'Cyber Phantom', baseSpeed: 50 });
+  const track = { totalLength: 1000 };
+
+  // Call update(dt, track, null, playerDistance)
+  ai.distanceTraveled = 100;
+  ai.update(1/60, track, null, 250); // playerDiff = 150 (> 80)
+  assert.equal(ai.isRubberbandBoosting, true, 'Should parse playerDistance correctly even when playerPosition is null');
+
+  // Test resetToTrack with negative distance
+  const mockThree = createMockThree();
+  const trackMath = new TrackMath(DEFAULT_TRACK_POINTS, 24);
+  const aiCar = new AICar({ three: mockThree, track: trackMath });
+
+  aiCar.resetToTrack(trackMath, -50);
+  assert.ok(aiCar.splineProgress >= 0 && aiCar.splineProgress < 1, `splineProgress must be in [0, 1) for negative distance, got ${aiCar.splineProgress}`);
+  const trackLen = trackMath.totalLength;
+  const expected = (((-50 % trackLen) + trackLen) % trackLen) / trackLen;
+  assert.ok(Math.abs(aiCar.splineProgress - expected) < 0.0001);
 });

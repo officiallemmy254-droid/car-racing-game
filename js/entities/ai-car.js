@@ -117,8 +117,9 @@ export class AICarLogic {
     this.isRubberbandBoosting = false;
     this.isRubberbandEasing = false;
 
-    // Boost timer
+    // Boost timer and cooldown
     this.boostTimer = 0;
+    this.boostCooldown = 0;
   }
 
   /**
@@ -153,16 +154,24 @@ export class AICarLogic {
       if (Array.isArray(arg4)) {
         otherVehicles = arg4;
       }
-    } else if (arg3 && typeof arg3 === 'object') {
+    } else {
       // Signature: update(dt, track, playerPosition, playerDistance, otherVehicles)
-      playerPosition = arg3;
+      // or update(dt, track, null, playerDistance, otherVehicles)
+      if (arg3 && typeof arg3 === 'object') {
+        playerPosition = arg3;
+      }
       if (typeof arg4 === 'number') {
         playerDistance = arg4;
+      } else if (Array.isArray(arg4)) {
+        otherVehicles = arg4;
       }
       if (Array.isArray(arg5)) {
         otherVehicles = arg5;
       }
     }
+
+    // Decrement boost cooldown
+    this.boostCooldown -= dt;
 
     // -------------------------------------------------------------
     // 1. Dynamic Rubberbanding Calculation
@@ -178,9 +187,10 @@ export class AICarLogic {
       targetSpeed = this.baseSpeed * boostRatio;
 
       // Strategic nitro activation when player leads significantly
-      if (playerDiff > 120 && this.boostTimer <= 0 && Math.random() < this.nitroTendency * 0.1) {
+      if (playerDiff > 120 && this.boostTimer <= 0 && this.boostCooldown <= 0 && Math.random() < this.nitroTendency * dt * 0.5) {
         this.isBoosting = true;
         this.boostTimer = 2.0; // 2 seconds of nitro
+        this.boostCooldown = 6.0;
       }
     } else if (playerDiff < -80) {
       // Player is behind by > 80m -> Ease speed target (-8% to -14%)
@@ -207,12 +217,11 @@ export class AICarLogic {
     // -------------------------------------------------------------
     // 2. Obstacle & Rival Raycasting & Multi-Lane Avoidance
     // -------------------------------------------------------------
-    const wasBrakingRequested = this.isBraking;
     this.isBraking = false;
+    let nearestObstacleAhead = null;
 
     if (otherVehicles && otherVehicles.length > 0) {
       const SENSOR_RANGE = 25.0; // Forward detection range (meters)
-      let nearestObstacleAhead = null;
       let minAheadDist = Infinity;
 
       for (const veh of otherVehicles) {
@@ -296,8 +305,8 @@ export class AICarLogic {
       }
     }
 
-    if (wasBrakingRequested) {
-      this.isBraking = true;
+    if (!nearestObstacleAhead) {
+      this.targetLaneOffset = this.preferredLaneOffset;
     }
 
     this.currentSpeedTarget = targetSpeed;
@@ -516,8 +525,8 @@ export class AICar {
       const steerYaw = Math.max(-0.25, Math.min(0.25, laneDelta * 0.15));
       const visualHeading = baseHeading + steerYaw;
 
-      // Pitch follows track incline
-      const pitch = Math.asin(Math.max(-0.5, Math.min(0.5, tangent.y)));
+      // Pitch follows track incline: positive tangent.y (uphill) tilts nose up (-X rotation in Three.js)
+      const pitch = -Math.asin(Math.max(-0.5, Math.min(0.5, tangent.y)));
 
       if (typeof this.mesh.rotation.set === 'function') {
         this.mesh.rotation.set(pitch, visualHeading, 0);
@@ -561,10 +570,12 @@ export class AICar {
       this.logic.targetLaneOffset = laneOffset;
     }
     const trackLen = this.track ? this.track.totalLength : 1000;
-    this.logic.splineProgress = trackLen > 0 ? (distance % trackLen) / trackLen : 0;
+    this.logic.splineProgress = trackLen > 0 ? (((distance % trackLen) + trackLen) % trackLen) / trackLen : 0;
     this.logic.currentLap = 1;
     this.logic.isBraking = false;
     this.logic.isBoosting = false;
+    this.logic.boostTimer = 0;
+    this.logic.boostCooldown = 0;
 
     if (this.track) {
       this._updateTransform(this.track, 0);
