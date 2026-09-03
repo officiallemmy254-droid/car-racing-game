@@ -170,8 +170,8 @@ export class Track {
 
       if (i < segments) {
         const vIdx = i * 2;
-        indices.push(vIdx, vIdx + 1, vIdx + 2);
-        indices.push(vIdx + 1, vIdx + 3, vIdx + 2);
+        indices.push(vIdx, vIdx + 2, vIdx + 1);
+        indices.push(vIdx + 1, vIdx + 2, vIdx + 3);
       }
     }
 
@@ -592,7 +592,7 @@ export class Track {
         new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.9 })
       );
       housing.rotation.x = Math.PI / 2;
-      housing.position.set(k * 2.5, gantryH - 1.2, 0.4);
+      housing.position.set(k * 2.5, gantryH - 1.2, -0.4);
       group.add(housing);
 
       // Red LED
@@ -604,7 +604,7 @@ export class Track {
           emissiveIntensity: 1.2
         })
       );
-      redLight.position.set(k * 2.5, gantryH - 1.2, 0.6);
+      redLight.position.set(k * 2.5, gantryH - 1.2, -0.6);
       group.add(redLight);
     }
 

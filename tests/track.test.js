@@ -111,3 +111,36 @@ test('TrackMath barrier collision returns inward separating normal', () => {
   // Normal must point inward toward track interior (+Z direction)
   assert.ok(leftHit.normal.z > 0.5, 'Normal must point toward track interior (+Z)');
 });
+
+test('TrackMath projectPoint wraps around seam correctly near finish line without snapping to 0', () => {
+  const track = new TrackMath();
+  const L = track.totalLength;
+
+  // Point on centerline 2 meters before finish line (s ≈ L - 2)
+  const targetT = (L - 2) / L;
+  const pointNearFinish = track.getSplinePoint(targetT);
+  const projNearFinish = track.projectPoint(pointNearFinish);
+
+  assert.ok(projNearFinish.t > 0.99, `Projection t should be > 0.99 near finish line, got ${projNearFinish.t}`);
+  assert.ok(projNearFinish.t < 1.0, `Projection t should be < 1.0, got ${projNearFinish.t}`);
+  assert.ok(Math.abs(projNearFinish.distance - (L - 2)) < 0.1, `Projection distance should be close to L - 2, got ${projNearFinish.distance}`);
+  assert.ok(Math.abs(projNearFinish.lateralDistance) < 0.1, `Lateral distance should be ~0, got ${projNearFinish.lateralDistance}`);
+
+  // Point with lateral offset near finish line
+  const norm = track.getNormalAt(targetT);
+  const offsetPoint = {
+    x: pointNearFinish.x + norm.x * 6,
+    y: pointNearFinish.y + norm.y * 6,
+    z: pointNearFinish.z + norm.z * 6
+  };
+  const projOffset = track.projectPoint(offsetPoint);
+  assert.ok(projOffset.t > 0.99, `Offset point t should be > 0.99 near finish line, got ${projOffset.t}`);
+  assert.ok(Math.abs(projOffset.lateralDistance - 6) < 0.1, `Lateral distance should be ~6, got ${projOffset.lateralDistance}`);
+
+  // Point just after start line (s = 2) should project to t ≈ 0.0009
+  const pointAfterStart = track.getSplinePoint(2 / L);
+  const projAfterStart = track.projectPoint(pointAfterStart);
+  assert.ok(projAfterStart.t < 0.01, `Point after start line should project to t < 0.01, got ${projAfterStart.t}`);
+  assert.ok(Math.abs(projAfterStart.distance - 2) < 0.1, `Projection distance should be close to 2, got ${projAfterStart.distance}`);
+});
+

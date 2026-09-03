@@ -250,11 +250,13 @@ export class TrackMath {
    * @returns {{t: number, distance: number, lateralDistance: number, normal: {x: number, y: number, z: number}, trackPoint: {x: number, y: number, z: number}}}
    */
   projectPoint(pos) {
+    const sampleCount = this.samples.length - 1;
+
     // 1. Coarse search over sampled lookup table
     let bestDistSq = Infinity;
     let bestIdx = 0;
     const step = 5;
-    for (let i = 0; i < this.samples.length; i += step) {
+    for (let i = 0; i <= sampleCount; i += step) {
       const p = this.samples[i];
       const d = (pos.x - p.x) ** 2 + (pos.y - p.y) ** 2 + (pos.z - p.z) ** 2;
       if (d < bestDistSq) {
@@ -263,22 +265,39 @@ export class TrackMath {
       }
     }
 
-    // 2. Fine search around best index
-    const start = Math.max(0, bestIdx - step * 2);
-    const end = Math.min(this.samples.length - 1, bestIdx + step * 2);
-    for (let i = start; i <= end; i++) {
-      const p = this.samples[i];
+    // 2. Fine search around best index wrapping modulo sample count
+    const window = step * 2;
+    for (let k = -window; k <= window; k++) {
+      const idx = ((bestIdx + k) % sampleCount + sampleCount) % sampleCount;
+      const p = this.samples[idx];
       const d = (pos.x - p.x) ** 2 + (pos.y - p.y) ** 2 + (pos.z - p.z) ** 2;
       if (d < bestDistSq) {
         bestDistSq = d;
-        bestIdx = i;
+        bestIdx = idx;
       }
+    }
+
+    // Disambiguate seam at start/finish line where sample 0 and sampleCount share coordinates
+    if (bestIdx === 0 || bestIdx === sampleCount) {
+      const p0 = this.samples[0];
+      const tan0 = this.getSplineTangent(0);
+      const forwardDist = (pos.x - p0.x) * tan0.x + (pos.y - p0.y) * tan0.y + (pos.z - p0.z) * tan0.z;
+      bestIdx = forwardDist < 0 ? sampleCount : 0;
     }
 
     // 3. Golden Section refinement for sub-millimeter precision
-    const sCenter = this.cumDist[bestIdx];
-    let rA = Math.max(0, sCenter - 2);
-    let rB = Math.min(this.totalLength, sCenter + 2);
+    let rA, rB;
+    if (bestIdx === 0) {
+      rA = 0;
+      rB = Math.min(this.totalLength, 2);
+    } else if (bestIdx === sampleCount) {
+      rA = Math.max(0, this.totalLength - 2);
+      rB = this.totalLength;
+    } else {
+      const sCenter = this.cumDist[bestIdx];
+      rA = Math.max(0, sCenter - 2);
+      rB = Math.min(this.totalLength, sCenter + 2);
+    }
 
     for (let it = 0; it < 12; it++) {
       const m1 = rA + (rB - rA) * 0.382;
@@ -296,7 +315,9 @@ export class TrackMath {
     }
 
     const finalS = (rA + rB) / 2;
-    const finalT = finalS / this.totalLength;
+    let finalT = finalS / this.totalLength;
+    if (finalT >= 1) finalT = 0.999999;
+    if (bestIdx === 0 && finalT > 0.5) finalT = 0;
     const trackPoint = this.getSplinePoint(finalT);
     const norm = this.getNormalAt(finalT);
 
