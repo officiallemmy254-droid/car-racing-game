@@ -653,3 +653,48 @@ test('Restart race resets vehicle positions and returns to countdown', () => {
   assert.equal(game.raceManager.currentLap, 1);
   assert.equal(game.playerCar.getSpeed(), 0);
 });
+
+test('Input pulses are reset cleanly by inputManager.update()', () => {
+  const mockThree = createMockThree();
+  const mockDOM = createMockDOM();
+
+  const game = new Game({
+    three: mockThree,
+    dom: mockDOM,
+    headless: true,
+    autoStartLoop: false
+  });
+
+  game.inputManager.state.handleKeyDown('KeyC');
+  assert.equal(game.inputManager.getInputState().switchCam, true);
+
+  game.inputManager.update();
+  assert.equal(game.inputManager.getInputState().switchCam, false);
+});
+
+test('Global _onKeyDown toggles pause bi-directionally and starts menu on Enter/Space', () => {
+  const mockThree = createMockThree();
+  const mockDOM = createMockDOM();
+
+  const game = new Game({
+    three: mockThree,
+    dom: mockDOM,
+    headless: true,
+    autoStartLoop: false
+  });
+
+  // 1. Menu start on Enter
+  assert.equal(game.state, GAME_STATES.MENU);
+  game._onKeyDown({ code: 'Enter' });
+  assert.equal(game.state, GAME_STATES.COUNTDOWN);
+
+  // 2. Pause toggle in RACING state
+  game.setState(GAME_STATES.RACING);
+  game._onKeyDown({ code: 'Escape' });
+  assert.equal(game.state, GAME_STATES.PAUSED);
+
+  // 3. Resume from PAUSED state via keyboard
+  game._onKeyDown({ code: 'KeyP' });
+  assert.equal(game.state, GAME_STATES.RACING);
+});
+

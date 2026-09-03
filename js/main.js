@@ -553,6 +553,23 @@ export class Game {
         this.restartRace();
       });
     }
+
+    // Global keyboard shortcuts (Pause toggle on Esc/P, Start on Enter/Space in MENU)
+    this._onKeyDown = (e) => {
+      const code = e.code || e.key;
+      if (code === 'Escape' || code === 'KeyP' || code === 'p' || code === 'P') {
+        if (this.state === GAME_STATES.RACING || this.state === GAME_STATES.PAUSED) {
+          this.togglePause();
+        }
+      } else if ((code === 'Enter' || code === 'Space' || code === ' ') && this.state === GAME_STATES.MENU) {
+        this.soundManager.startAudio();
+        this.soundManager.startMusic();
+        this.startCountdown();
+      }
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('keydown', this._onKeyDown);
+    }
   }
 
   /**
@@ -825,16 +842,9 @@ export class Game {
       ? this.inputManager.getInputState()
       : (this.inputManager?.getState ? this.inputManager.getState() : (this.inputManager?.state?.getState ? this.inputManager.state.getState() : (this.inputManager?.state || {})));
 
-    // Check single-frame pulses
-    if (input.pause) {
-      this.togglePause();
-      return;
-    }
+    // Check single-frame reset pulse
     if (input.reset) {
       this.playerCar.resetToTrack(this.trackMath);
-    }
-    if (input.switchCam && this.cameraController) {
-      this.cameraController.switchView();
     }
 
     // 2. Update Player Car physics
@@ -1029,6 +1039,11 @@ export class Game {
       if (this.minimapRenderer) {
         this.minimapRenderer.draw(this.playerCar, this.aiCars, this.totalElapsedTime);
       }
+
+      // 7. Reset single-frame input pulses for next frame
+      if (this.inputManager && typeof this.inputManager.update === 'function') {
+        this.inputManager.update();
+      }
     };
 
     if (typeof requestAnimationFrame === 'function') {
@@ -1055,6 +1070,10 @@ export class Game {
 
     if (this._onResize && typeof window !== 'undefined') {
       window.removeEventListener('resize', this._onResize);
+    }
+
+    if (this._onKeyDown && typeof window !== 'undefined') {
+      window.removeEventListener('keydown', this._onKeyDown);
     }
 
     if (this.inputManager && typeof this.inputManager.destroy === 'function') {
