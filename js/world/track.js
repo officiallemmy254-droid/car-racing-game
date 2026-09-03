@@ -8,10 +8,39 @@
  * - Start / Finish overhead LED gantry with chequered finish line
  */
 
-import * as THREE from 'three';
+let defaultThree = globalThis.THREE || null;
+try {
+  const threeModule = await import('three');
+  defaultThree = threeModule.default || threeModule;
+} catch (e) {
+  // Graceful fallback for headless Node.js testing
+}
+
+const THREE = new Proxy({}, {
+  get(target, prop) {
+    const instance = defaultThree || globalThis.THREE;
+    return instance ? instance[prop] : undefined;
+  }
+});
+
 import { TrackMath, DEFAULT_TRACK_POINTS } from './track-math.js';
 
 export class Track {
+  /**
+   * Explicitly set Three.js instance if needed (e.g. for testing)
+   * @param {object} threeInstance
+   */
+  static setThree(threeInstance) {
+    defaultThree = threeInstance;
+  }
+
+  /**
+   * Get currently active Three.js instance
+   * @returns {object|null}
+   */
+  static getThree() {
+    return defaultThree || globalThis.THREE || null;
+  }
   /**
    * @param {TrackMath} [trackMath]
    * @param {object} [options]
@@ -471,7 +500,7 @@ export class Track {
 
       // Align gate with track direction
       const forward = new THREE.Vector3(cp.tangent.x, cp.tangent.y, cp.tangent.z);
-      const lookTarget = cp.position.clone().add(forward);
+      const lookTarget = gate.position.clone().add(forward);
       gate.lookAt(lookTarget);
 
       const archW = this.width + 4; // 28m
