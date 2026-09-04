@@ -102,7 +102,7 @@ Run the test suite:
 node --test tests/*.test.js
 ```
 
-### Test Suites (95 passing tests):
+### Test Suites (119 passing tests):
 1. `tests/shell.test.js` — DOM IDs, HUD elements, CSS styles
 2. `tests/track.test.js` — Catmull-Rom spline, arc-length LUT, seam wrap-around, barrier collision
 3. `tests/car-builder.test.js` — Car dimensions, player and 5 rival palettes, 3D hierarchy
@@ -113,6 +113,8 @@ node --test tests/*.test.js
 8. `tests/input.test.js` — Key mappings, touch controls, camera modes, FOV expansion, trauma shake
 9. `tests/race-manager.test.js` — Anti-cheat checkpoint sequencing, drafting speed bonus, real-time standings
 10. `tests/integration.test.js` — State machine lifecycle, 60Hz physics accumulator, minimap drawing, HUD updates
+11. `tests/game-bugs.test.js` — Audio engine RPM, player tracking for AI avoidance, lap restart sync, reverse speedometer
+12. `tests/controls-responsiveness.test.js` — Drift counter-steer line control, low-speed turn assist, barrier slide recovery, AZERTY support
 
 ---
 
@@ -141,7 +143,7 @@ car-racing-game/
 │       ├── particles.js        # Zero-GC particle pools for exhaust, sparks, and speed lines
 │       ├── track-math.js       # 24-point Catmull-Rom spline mathematics & collision bounds
 │       └── track.js            # Three.js road meshes, neon curbs, barriers, checkpoint arches
-└── tests/                      # 10 headless test suites (95 tests)
+└── tests/                      # 12 headless test suites (119 tests)
 ```
 
 ---
