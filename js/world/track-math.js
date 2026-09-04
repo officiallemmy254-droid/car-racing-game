@@ -282,7 +282,7 @@ export class TrackMath {
       const p0 = this.samples[0];
       const tan0 = this.getSplineTangent(0);
       const forwardDist = (pos.x - p0.x) * tan0.x + (pos.y - p0.y) * tan0.y + (pos.z - p0.z) * tan0.z;
-      bestIdx = forwardDist < 0 ? sampleCount : 0;
+      bestIdx = forwardDist < -0.05 ? sampleCount : 0;
     }
 
     // 3. Golden Section refinement for sub-millimeter precision

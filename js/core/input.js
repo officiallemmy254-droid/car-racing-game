@@ -47,7 +47,7 @@ export class InputState {
     if (!code) return;
 
     const lower = code.toLowerCase();
-    const wasPressed = this.activeKeys.has(code);
+    const wasPressed = this.activeKeys.has(code) || (typeof eventOrCode === 'object' && eventOrCode.key && this.activeKeys.has(eventOrCode.key));
 
     // Register pulses on fresh key press (avoid key repeat re-triggering)
     if (!wasPressed) {
@@ -61,6 +61,14 @@ export class InputState {
     }
 
     this.activeKeys.add(code);
+    this.activeKeys.add(lower);
+    if (typeof eventOrCode === 'object' && eventOrCode.key) {
+      const keyVal = eventOrCode.key === ' ' ? 'Space' : eventOrCode.key.trim();
+      if (keyVal) {
+        this.activeKeys.add(keyVal);
+        this.activeKeys.add(keyVal.toLowerCase());
+      }
+    }
   }
 
   /**
@@ -72,10 +80,20 @@ export class InputState {
     if (!code) return;
 
     this.activeKeys.delete(code);
+    this.activeKeys.delete(code.toLowerCase());
 
-    // Also delete any case-insensitive duplicates
-    for (const key of this.activeKeys) {
-      if (key.toLowerCase() === code.toLowerCase()) {
+    if (typeof eventOrCode === 'object' && eventOrCode.key) {
+      const keyVal = eventOrCode.key === ' ' ? 'Space' : eventOrCode.key.trim();
+      if (keyVal) {
+        this.activeKeys.delete(keyVal);
+        this.activeKeys.delete(keyVal.toLowerCase());
+      }
+    }
+
+    // Clean up any remaining case-insensitive matches
+    const lower = code.toLowerCase();
+    for (const key of Array.from(this.activeKeys)) {
+      if (key.toLowerCase() === lower) {
         this.activeKeys.delete(key);
       }
     }
@@ -86,21 +104,18 @@ export class InputState {
    * @private
    */
   _hasAnyKey(...keys) {
-    for (const k of keys) {
-      if (this.activeKeys.has(k)) return true;
-      const lower = k.toLowerCase();
-      for (const active of this.activeKeys) {
-        if (active.toLowerCase() === lower) return true;
-      }
+    for (let i = 0; i < keys.length; i++) {
+      const k = keys[i];
+      if (this.activeKeys.has(k) || this.activeKeys.has(k.toLowerCase())) return true;
     }
     return false;
   }
 
   /**
-   * Throttle (0 to 1)
+   * Throttle (0 to 1) - supports WASD, Arrows, IJKL, Numpad, and AZERTY (Z)
    */
   get throttle() {
-    if (this._hasAnyKey('KeyW', 'ArrowUp', 'w')) {
+    if (this._hasAnyKey('KeyW', 'ArrowUp', 'w', 'W', 'Up', 'KeyI', 'i', 'Numpad8', 'KeyZ', 'z', 'Z')) {
       return 1;
     }
     return Math.max(0, Math.min(1, this._virtualThrottle));
@@ -110,18 +125,18 @@ export class InputState {
    * Brake / Reverse (0 to 1)
    */
   get brake() {
-    if (this._hasAnyKey('KeyS', 'ArrowDown', 's')) {
+    if (this._hasAnyKey('KeyS', 'ArrowDown', 's', 'S', 'Down', 'KeyK', 'k', 'Numpad2', 'Numpad5')) {
       return 1;
     }
     return Math.max(0, Math.min(1, this._virtualBrake));
   }
 
   /**
-   * Steering (-1 for Left, +1 for Right, 0 for Neutral)
+   * Steering (-1 for Left, +1 for Right, 0 for Neutral) - supports WASD, Arrows, IJKL, Numpad, and AZERTY (Q)
    */
   get steer() {
-    const left = this._hasAnyKey('KeyA', 'ArrowLeft', 'a') ? 1 : 0;
-    const right = this._hasAnyKey('KeyD', 'ArrowRight', 'd') ? 1 : 0;
+    const left = this._hasAnyKey('KeyA', 'ArrowLeft', 'a', 'A', 'Left', 'KeyJ', 'j', 'Numpad4', 'KeyQ', 'q', 'Q') ? 1 : 0;
+    const right = this._hasAnyKey('KeyD', 'ArrowRight', 'd', 'D', 'Right', 'KeyL', 'l', 'Numpad6') ? 1 : 0;
     const keySteer = right - left;
 
     if (keySteer !== 0) {
@@ -131,17 +146,17 @@ export class InputState {
   }
 
   /**
-   * Handbrake / Drift
+   * Handbrake / Drift - Space, Spacebar, or KeyX
    */
   get drift() {
-    return this._hasAnyKey('Space', ' ') || this._virtualDrift;
+    return this._hasAnyKey('Space', ' ', 'Spacebar', 'KeyX', 'x', 'X') || this._virtualDrift;
   }
 
   /**
-   * Nitro Boost
+   * Nitro Boost - Shift, KeyE, KeyN
    */
   get nitro() {
-    return this._hasAnyKey('ShiftLeft', 'ShiftRight', 'Shift') || this._virtualNitro;
+    return this._hasAnyKey('ShiftLeft', 'ShiftRight', 'Shift', 'KeyE', 'e', 'E', 'KeyN', 'n', 'N') || this._virtualNitro;
   }
 
   /**
@@ -256,6 +271,16 @@ export class InputManager {
     this._touchSteerRight = false;
     this._listeners = [];
 
+    // Gamepad connection & polling state
+    this._hasGamepadSteer = false;
+    this._hasGamepadThrottle = false;
+    this._hasGamepadBrake = false;
+    this._hasGamepadDrift = false;
+    this._hasGamepadNitro = false;
+    this._prevGpCam = false;
+    this._prevGpReset = false;
+    this._prevGpPause = false;
+
     if (typeof window !== 'undefined') {
       this._initKeyboardListeners();
 
@@ -269,16 +294,130 @@ export class InputManager {
   }
 
   /**
+   * Poll standard Gamepad API for controller inputs
+   * @private
+   */
+  _pollGamepad() {
+    if (typeof navigator === 'undefined' || typeof navigator.getGamepads !== 'function') return;
+    let gamepads;
+    try {
+      gamepads = navigator.getGamepads();
+    } catch (e) {
+      return;
+    }
+    if (!gamepads) return;
+
+    let gp = null;
+    for (let i = 0; i < gamepads.length; i++) {
+      if (gamepads[i] && gamepads[i].connected) {
+        gp = gamepads[i];
+        break;
+      }
+    }
+    if (!gp) return;
+
+    // Analog stick steering with deadzone
+    const deadzone = 0.12;
+    let stickX = (gp.axes && gp.axes[0] !== undefined) ? gp.axes[0] : 0;
+    if (Math.abs(stickX) < deadzone) stickX = 0;
+    else stickX = (stickX - Math.sign(stickX) * deadzone) / (1 - deadzone);
+
+    // D-Pad steering (14 = left, 15 = right)
+    const dpadLeft = (gp.buttons && gp.buttons[14]?.pressed) ? -1 : 0;
+    const dpadRight = (gp.buttons && gp.buttons[15]?.pressed) ? 1 : 0;
+    const dpadSteer = dpadLeft + dpadRight;
+    const totalSteer = dpadSteer !== 0 ? dpadSteer : stickX;
+
+    if (Math.abs(totalSteer) > 0.05) {
+      this.state.setSteer(totalSteer);
+      this._hasGamepadSteer = true;
+    } else if (this._hasGamepadSteer) {
+      this.state.setSteer(0);
+      this._hasGamepadSteer = false;
+    }
+
+    // RT is button 7, A is button 0
+    const btn7 = gp.buttons && gp.buttons[7];
+    const rtVal = btn7 ? (typeof btn7 === 'object' ? (btn7.value ?? (btn7.pressed ? 1 : 0)) : (btn7 ? 1 : 0)) : 0;
+    const btnA = gp.buttons && gp.buttons[0]?.pressed ? 1 : 0;
+    const throttleVal = Math.max(rtVal, btnA);
+    if (throttleVal > 0.05) {
+      this.state.setThrottle(throttleVal);
+      this._hasGamepadThrottle = true;
+    } else if (this._hasGamepadThrottle) {
+      this.state.setThrottle(0);
+      this._hasGamepadThrottle = false;
+    }
+
+    // LT is button 6, B is button 1
+    const btn6 = gp.buttons && gp.buttons[6];
+    const ltVal = btn6 ? (typeof btn6 === 'object' ? (btn6.value ?? (btn6.pressed ? 1 : 0)) : (btn6 ? 1 : 0)) : 0;
+    const btnB = gp.buttons && gp.buttons[1]?.pressed ? 1 : 0;
+    const brakeVal = Math.max(ltVal, btnB);
+    if (brakeVal > 0.05) {
+      this.state.setBrake(brakeVal);
+      this._hasGamepadBrake = true;
+    } else if (this._hasGamepadBrake) {
+      this.state.setBrake(0);
+      this._hasGamepadBrake = false;
+    }
+
+    // Drift: Button X (2) or RB (5)
+    const driftPressed = Boolean(gp.buttons && (gp.buttons[2]?.pressed || gp.buttons[5]?.pressed));
+    if (driftPressed) {
+      this.state.setDrift(true);
+      this._hasGamepadDrift = true;
+    } else if (this._hasGamepadDrift) {
+      this.state.setDrift(false);
+      this._hasGamepadDrift = false;
+    }
+
+    // Nitro: Button Y (3) or LB (4)
+    const nitroPressed = Boolean(gp.buttons && (gp.buttons[3]?.pressed || gp.buttons[4]?.pressed));
+    if (nitroPressed) {
+      this.state.setNitro(true);
+      this._hasGamepadNitro = true;
+    } else if (this._hasGamepadNitro) {
+      this.state.setNitro(false);
+      this._hasGamepadNitro = false;
+    }
+
+    // Pulses:
+    // Cam: D-Pad Up (12) or Right Stick button (11)
+    const camBtn = Boolean(gp.buttons && (gp.buttons[12]?.pressed || gp.buttons[11]?.pressed));
+    if (camBtn && !this._prevGpCam) {
+      this.state.triggerSwitchCam();
+    }
+    this._prevGpCam = camBtn;
+
+    // Reset: Back / Select (8)
+    const resetBtn = Boolean(gp.buttons && gp.buttons[8]?.pressed);
+    if (resetBtn && !this._prevGpReset) {
+      this.state.triggerReset();
+    }
+    this._prevGpReset = resetBtn;
+
+    // Pause: Start / Options (9)
+    const pauseBtn = Boolean(gp.buttons && gp.buttons[9]?.pressed);
+    if (pauseBtn && !this._prevGpPause) {
+      this.state.triggerPause();
+    }
+    this._prevGpPause = pauseBtn;
+  }
+
+  /**
    * Get current input state snapshot
    */
   getInputState() {
+    this._pollGamepad();
     return this.state.getState();
   }
 
   /**
-   * Frame update — clears one-shot pulse flags
+   * Frame update — polls gamepads and clears one-shot pulse flags
    */
   update() {
+    this._pollGamepad();
     this.state.resetPulses();
   }
 
@@ -289,7 +428,9 @@ export class InputManager {
   _initKeyboardListeners() {
     const onKeyDown = (e) => {
       // Prevent scrolling on Space / Arrow keys during gameplay
-      if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code) || e.key === ' ') {
+      const code = e.code || '';
+      const key = e.key || '';
+      if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(code) || [' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(key)) {
         e.preventDefault();
       }
       this.state.handleKeyDown(e);
@@ -432,13 +573,18 @@ export class InputManager {
       const btn = container.querySelector(selector);
       if (!btn) return;
 
+      let isPressed = false;
       const handleDown = (e) => {
-        e.preventDefault();
+        if (e && typeof e.preventDefault === 'function') e.preventDefault();
+        if (isPressed) return;
+        isPressed = true;
         btn.classList.add('active');
         onDown();
       };
       const handleUp = (e) => {
-        e.preventDefault();
+        if (e && typeof e.preventDefault === 'function') e.preventDefault();
+        if (!isPressed) return;
+        isPressed = false;
         btn.classList.remove('active');
         onUp();
       };
@@ -446,11 +592,17 @@ export class InputManager {
       btn.addEventListener('touchstart', handleDown, { passive: false });
       btn.addEventListener('touchend', handleUp, { passive: false });
       btn.addEventListener('touchcancel', handleUp, { passive: false });
+      btn.addEventListener('mousedown', handleDown);
+      btn.addEventListener('mouseup', handleUp);
+      btn.addEventListener('mouseleave', handleUp);
 
       this._listeners.push(
         { target: btn, type: 'touchstart', listener: handleDown },
         { target: btn, type: 'touchend', listener: handleUp },
-        { target: btn, type: 'touchcancel', listener: handleUp }
+        { target: btn, type: 'touchcancel', listener: handleUp },
+        { target: btn, type: 'mousedown', listener: handleDown },
+        { target: btn, type: 'mouseup', listener: handleUp },
+        { target: btn, type: 'mouseleave', listener: handleUp }
       );
     };
 
@@ -493,21 +645,29 @@ export class InputManager {
     const camBtn = container.querySelector('#touch-cam');
     if (camBtn) {
       const onCamTouch = (e) => {
-        e.preventDefault();
+        if (e && typeof e.preventDefault === 'function') e.preventDefault();
         this.state.triggerSwitchCam();
       };
       camBtn.addEventListener('touchstart', onCamTouch, { passive: false });
-      this._listeners.push({ target: camBtn, type: 'touchstart', listener: onCamTouch });
+      camBtn.addEventListener('click', onCamTouch);
+      this._listeners.push(
+        { target: camBtn, type: 'touchstart', listener: onCamTouch },
+        { target: camBtn, type: 'click', listener: onCamTouch }
+      );
     }
 
     const rstBtn = container.querySelector('#touch-reset');
     if (rstBtn) {
       const onRstTouch = (e) => {
-        e.preventDefault();
+        if (e && typeof e.preventDefault === 'function') e.preventDefault();
         this.state.triggerReset();
       };
       rstBtn.addEventListener('touchstart', onRstTouch, { passive: false });
-      this._listeners.push({ target: rstBtn, type: 'touchstart', listener: onRstTouch });
+      rstBtn.addEventListener('click', onRstTouch);
+      this._listeners.push(
+        { target: rstBtn, type: 'touchstart', listener: onRstTouch },
+        { target: rstBtn, type: 'click', listener: onRstTouch }
+      );
     }
   }
 
@@ -524,5 +684,12 @@ export class InputManager {
       this.touchContainer.parentNode.removeChild(this.touchContainer);
       this.touchContainer = null;
     }
+  }
+
+  /**
+   * Alias for dispose
+   */
+  destroy() {
+    this.dispose();
   }
 }

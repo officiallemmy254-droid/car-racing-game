@@ -229,11 +229,13 @@ export class AICarLogic {
 
         const vehDist = typeof veh.distanceTraveled === 'number'
           ? veh.distanceTraveled
-          : (veh.distanceAlongTrack || 0);
+          : (typeof veh.distanceAlongTrack === 'number'
+            ? veh.distanceAlongTrack
+            : (veh.physics?.distanceAlongTrack ?? 0));
 
         const vehLane = typeof veh.laneOffset === 'number'
           ? veh.laneOffset
-          : (veh.logic?.laneOffset ?? 0);
+          : (veh.logic?.laneOffset ?? veh.physics?.lateralDistance ?? 0);
 
         let relDist = vehDist - this.distanceTraveled;
         if (trackLength > 0) {
@@ -264,11 +266,13 @@ export class AICarLogic {
 
             const oDist = typeof obs.distanceTraveled === 'number'
               ? obs.distanceTraveled
-              : (obs.distanceAlongTrack || 0);
+              : (typeof obs.distanceAlongTrack === 'number'
+                ? obs.distanceAlongTrack
+                : (obs.physics?.distanceAlongTrack ?? 0));
 
             const oLane = typeof obs.laneOffset === 'number'
               ? obs.laneOffset
-              : (obs.logic?.laneOffset ?? 0);
+              : (obs.logic?.laneOffset ?? obs.physics?.lateralDistance ?? 0);
 
             let oRel = oDist - this.distanceTraveled;
             if (trackLength > 0) {

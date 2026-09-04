@@ -41,8 +41,8 @@ export const PHYSICS_CONSTANTS = {
   // Speed-Sensitive Steering (radians)
   STEER_MAX_LOW: 0.62,            // ~35.5 deg at low speeds
   STEER_MAX_HIGH: 0.22,           // ~12.6 deg at max speed
-  STEER_INPUT_RATE: 10.0,         // Steering response rate (rad/s)
-  STEER_RETURN_RATE: 8.0,         // Auto-centering return rate (rad/s)
+  STEER_INPUT_RATE: 15.0,         // Steering response rate (rad/s)
+  STEER_RETURN_RATE: 18.0,        // Auto-centering return rate (rad/s)
   WHEELBASE: 2.6,                 // Wheelbase between axles in meters
 
   // Drift Mechanics
@@ -127,6 +127,7 @@ export class VehiclePhysics {
     this.driftDirection = 1;        // -1 (left) or 1 (right)
     this.driftDuration = 0;         // Seconds of continuous drift
     this.driftAngle = 0;            // Oversteer yaw angle (radians)
+    this.lateralSlip = 0;           // Smooth lateral slide velocity (m/s)
 
     // Mini-Turbo state
     this.hasMiniTurbo = false;
@@ -145,6 +146,7 @@ export class VehiclePhysics {
     // Track progression tracking
     this.splineProgress = 0;
     this.distanceAlongTrack = 0;
+    this.lateralDistance = 0;
   }
 
   /**
@@ -183,8 +185,13 @@ export class VehiclePhysics {
     let targetTopSpeed = PHYSICS_CONSTANTS.MAX_SPEED_NORMAL;
     if (this.isBoosting) {
       targetTopSpeed = PHYSICS_CONSTANTS.MAX_SPEED_NITRO;
-    } else if (this.isDrafting) {
-      targetTopSpeed = PHYSICS_CONSTANTS.MAX_SPEED_NORMAL * (1 + PHYSICS_CONSTANTS.DRAFTING_TOP_SPEED_BONUS);
+    } else {
+      if (this.hasMiniTurbo) {
+        targetTopSpeed += PHYSICS_CONSTANTS.MINI_TURBO_KICK;
+      }
+      if (this.isDrafting) {
+        targetTopSpeed += PHYSICS_CONSTANTS.MAX_SPEED_NORMAL * PHYSICS_CONSTANTS.DRAFTING_TOP_SPEED_BONUS;
+      }
     }
 
     // -------------------------------------------------------------
@@ -193,12 +200,12 @@ export class VehiclePhysics {
     const wasDrifting = this.isDrifting;
     const hasDriftSpeed = Math.abs(this.speed) >= PHYSICS_CONSTANTS.DRIFT_TRIGGER_SPEED;
     const hasSustainSpeed = Math.abs(this.speed) >= PHYSICS_CONSTANTS.DRIFT_MIN_SPEED;
-    const hasSteerInput = Math.abs(steer) > 0.05;
+    const hasSteerInput = Math.abs(steer) > 0.05 || Math.abs(this.steerAngle) > 0.05;
 
     if (wantsDrift && ((!wasDrifting && hasDriftSpeed && hasSteerInput) || (wasDrifting && hasSustainSpeed))) {
       this.isDrifting = true;
-      if (hasSteerInput) {
-        this.driftDirection = Math.sign(steer);
+      if (!wasDrifting) {
+        this.driftDirection = Math.sign(steer) || (this.steerAngle >= 0 ? 1 : -1) || 1;
       }
       this.driftDuration += dt;
       // Recharges nitro gauge by +18%/s
@@ -289,9 +296,12 @@ export class VehiclePhysics {
 
     if (Math.abs(steer) > 0.05) {
       const diff = targetSteerAngle - this.steerAngle;
-      this.steerAngle += Math.sign(diff) * Math.min(Math.abs(diff), PHYSICS_CONSTANTS.STEER_INPUT_RATE * dt);
+      // Direction-reversal boost for snappy chicane transitions
+      const isReversing = (this.steerAngle * steer < -0.01);
+      const rate = isReversing ? PHYSICS_CONSTANTS.STEER_INPUT_RATE * 1.5 : PHYSICS_CONSTANTS.STEER_INPUT_RATE;
+      this.steerAngle += Math.sign(diff) * Math.min(Math.abs(diff), rate * dt);
     } else {
-      // Auto-centering return rate
+      // Auto-centering return rate with crisp snap-back
       if (Math.abs(this.steerAngle) < PHYSICS_CONSTANTS.STEER_RETURN_RATE * dt) {
         this.steerAngle = 0;
       } else {
@@ -301,19 +311,37 @@ export class VehiclePhysics {
 
     // Oversteer yaw angle during drift
     if (this.isDrifting) {
-      const targetDriftAngle = this.driftDirection * PHYSICS_CONSTANTS.DRIFT_MAX_ANGLE;
-      this.driftAngle += (targetDriftAngle - this.driftAngle) * Math.min(1, 8.0 * dt);
+      // Counter-steering modulates oversteer drift angle smoothly
+      const steerMod = this.driftDirection * steer;
+      const angleScale = 0.85 + 0.25 * Math.max(-0.6, Math.min(1.0, steerMod));
+      const targetDriftAngle = this.driftDirection * (PHYSICS_CONSTANTS.DRIFT_MAX_ANGLE * angleScale);
+      this.driftAngle += (targetDriftAngle - this.driftAngle) * Math.min(1, 10.0 * dt);
     } else {
-      this.driftAngle += (0 - this.driftAngle) * Math.min(1, 10.0 * dt);
+      this.driftAngle += (0 - this.driftAngle) * Math.min(1, 14.0 * dt);
+      if (Math.abs(this.driftAngle) < 0.005) this.driftAngle = 0;
     }
 
     // -------------------------------------------------------------
     // 5. Kinematic Heading & Velocity Integration
     // -------------------------------------------------------------
     if (Math.abs(this.speed) > 0.05) {
-      let yawRate = (this.speed / PHYSICS_CONSTANTS.WHEELBASE) * Math.sin(this.steerAngle);
+      let yawRate;
       if (this.isDrifting) {
-        yawRate *= PHYSICS_CONSTANTS.DRIFT_YAW_RATE_MULT;
+        // Drift yaw: turn along drift arc, modulated smoothly by steer input
+        // Counter-steering (steerMod < 0) flattens the drift arc to prevent spinouts,
+        // while steering into the turn (steerMod > 0) sharpens the arc for tight hairpins.
+        const steerMod = steer * this.driftDirection;
+        const baseDriftYaw = 0.95 * Math.min(1.25, Math.max(0.75, Math.abs(this.speed) / 35.0));
+        const turnMod = steerMod >= 0
+          ? (1.0 + 1.05 * steerMod)
+          : Math.max(0.08, 1.0 + 0.92 * steerMod);
+        yawRate = this.driftDirection * baseDriftYaw * turnMod;
+      } else {
+        // High-speed yaw stabilization: responsive Ackerman steering with low-speed turning assist
+        const effectiveSpeed = Math.max(Math.abs(this.speed), 8.0);
+        const rawYaw = (Math.sign(this.speed) * effectiveSpeed / PHYSICS_CONSTANTS.WHEELBASE) * Math.sin(this.steerAngle);
+        const maxYaw = 2.6;
+        yawRate = Math.sign(rawYaw) * Math.min(Math.abs(rawYaw), maxYaw);
       }
       this.heading += yawRate * dt;
 
@@ -325,14 +353,18 @@ export class VehiclePhysics {
     const sinH = Math.sin(this.heading);
     const cosH = Math.cos(this.heading);
 
-    // Lateral drift slip: car slides outward during drift
-    let lateralSlip = 0;
-    if (this.isDrifting) {
-      lateralSlip = -this.driftDirection * this.speed * PHYSICS_CONSTANTS.DRIFT_LATERAL_SLIP;
+    // Lateral drift slip: smoothly interpolate into target slip for buttery smooth transition
+    const targetLateralSlip = this.isDrifting
+      ? -this.driftDirection * this.speed * PHYSICS_CONSTANTS.DRIFT_LATERAL_SLIP
+      : 0;
+    const slipRate = this.isDrifting ? 14.0 : 16.0;
+    this.lateralSlip += (targetLateralSlip - this.lateralSlip) * Math.min(1, slipRate * dt);
+    if (!this.isDrifting && Math.abs(this.lateralSlip) < 0.05) {
+      this.lateralSlip = 0;
     }
 
-    this.velocity.x = sinH * this.speed + cosH * lateralSlip;
-    this.velocity.z = cosH * this.speed - sinH * lateralSlip;
+    this.velocity.x = sinH * this.speed + cosH * this.lateralSlip;
+    this.velocity.z = cosH * this.speed - sinH * this.lateralSlip;
 
     // Position integration
     this.position.x += this.velocity.x * dt;
@@ -359,20 +391,41 @@ export class VehiclePhysics {
         this.position.y += barrier.normal.y * barrier.penetration;
         this.position.z += barrier.normal.z * barrier.penetration;
 
-        // Damp forward speed by 30%
-        this.speed *= PHYSICS_CONSTANTS.BARRIER_DAMPING;
-
         // Reflect velocity across barrier normal
         const normalDot = this.velocity.x * barrier.normal.x + this.velocity.z * barrier.normal.z;
         const impactIntensity = Math.abs(normalDot);
 
         if (normalDot < 0) {
+          // Damp forward speed by 30% on penetrating impact
+          this.speed *= PHYSICS_CONSTANTS.BARRIER_DAMPING;
+
           const rest = 1 + PHYSICS_CONSTANTS.BARRIER_RESTITUTION;
           this.velocity.x -= rest * normalDot * barrier.normal.x;
           this.velocity.z -= rest * normalDot * barrier.normal.z;
 
-          // Realign heading to reflected velocity
-          this.heading = Math.atan2(this.velocity.x, this.velocity.z);
+          // Realign heading: guide heading smoothly away from wall without violent opposite-wall whip
+          const reflectedHeading = Math.atan2(this.velocity.x, this.velocity.z);
+          if (typeof track.getSplineTangent === 'function' && this.splineProgress !== undefined) {
+            const trackTan = track.getSplineTangent(this.splineProgress);
+            const trackHeading = Math.atan2(trackTan.x, trackTan.z);
+            let diffH = reflectedHeading - trackHeading;
+            while (diffH > Math.PI) diffH -= 2 * Math.PI;
+            while (diffH < -Math.PI) diffH += 2 * Math.PI;
+            const maxDev = Math.PI / 4;
+            const clampedDev = Math.max(-maxDev, Math.min(maxDev, diffH));
+            this.heading = trackHeading + clampedDev;
+          } else {
+            this.heading = reflectedHeading;
+          }
+
+          // Hard collision interrupts drift to prevent wall-riding exploits
+          if (impactIntensity > 2.5 && this.isDrifting) {
+            this.isDrifting = false;
+            this.driftDuration = 0;
+          }
+        } else {
+          // Glancing / sliding contact along barrier: apply gentle friction instead of killing all speed
+          this.speed = Math.max(0, this.speed - 12.0 * dt);
         }
 
         this.barrierCollision = {
@@ -389,6 +442,7 @@ export class VehiclePhysics {
       const proj = track.projectPoint(this.position);
       this.splineProgress = proj.t;
       this.distanceAlongTrack = proj.distance;
+      this.lateralDistance = proj.lateralDistance;
 
       // Follow track elevation smoothly (wheel center at +0.35m)
       const targetY = proj.trackPoint.y + 0.35;
@@ -408,11 +462,13 @@ export class VehiclePhysics {
       this.heading = Math.atan2(tan.x, tan.z);
       this.splineProgress = proj.t;
       this.distanceAlongTrack = proj.distance;
+      this.lateralDistance = proj.lateralDistance;
     } else {
       this.position.set(0, 0.35, 0);
       this.heading = 0;
       this.splineProgress = 0;
       this.distanceAlongTrack = 0;
+      this.lateralDistance = 0;
     }
 
     this.speed = 0;
@@ -421,6 +477,7 @@ export class VehiclePhysics {
     this.isDrifting = false;
     this.driftDuration = 0;
     this.driftAngle = 0;
+    this.lateralSlip = 0;
     this.isBoosting = false;
     this.hasMiniTurbo = false;
     this.miniTurboTimer = 0;
@@ -496,6 +553,12 @@ export class PlayerCar {
   get driftAngle() { return this.physics.driftAngle; }
   get hasCollidedBarrier() { return this.physics.hasCollidedBarrier; }
   get barrierCollision() { return this.physics.barrierCollision; }
+  get distanceAlongTrack() { return this.physics.distanceAlongTrack || 0; }
+  get distanceTraveled() {
+    const tLen = 1000;
+    return (Math.max(1, this.currentLap) - 1) * tLen + (this.physics.distanceAlongTrack || 0);
+  }
+  get laneOffset() { return this.physics.lateralDistance || 0; }
 
   getSpeed() { return this.physics.speed; }
   getSpeedKmH() { return Math.round(this.physics.speed * 3.6); }
@@ -615,6 +678,8 @@ export class PlayerCar {
     this.physics.resetToTrack(track);
     this.pitch = 0;
     this.roll = 0;
+    this.currentLap = 1;
+    this.previousProgress = (this.physics.splineProgress >= 0.95) ? 0 : (this.physics.splineProgress || 0);
     if (this.mesh) {
       this.mesh.position.set(this.physics.position.x, this.physics.position.y, this.physics.position.z);
       if (typeof this.mesh.rotation.set === 'function') {

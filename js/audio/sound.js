@@ -321,6 +321,15 @@ export class SoundManager {
   }
 
   /**
+   * Modulates engine RPM, frequency and lowpass filter
+   * @param {number} speed - Forward vehicle speed in m/s or speedRatio
+   * @param {boolean} [isAccelerating=false] - Whether throttle is actively applied
+   */
+  setEngineRPM(speed, isAccelerating = false) {
+    this.updateEngine(speed, isAccelerating);
+  }
+
+  /**
    * Modulates tire screech noise bandpass filter and gain for drift slides
    * @param {number} intensity - Drift intensity [0, 1]
    */
@@ -697,5 +706,28 @@ export class SoundManager {
       this.musicGain.gain.setValueAtTime(this.musicGain.gain.value, now);
       this.musicGain.gain.linearRampToValueAtTime(0.0001, now + MUSIC_CONFIG.fadeTime);
     }
+  }
+
+  /**
+   * Cleans up audio oscillators and contexts
+   */
+  dispose() {
+    this.stopMusic();
+    if (this.engineOsc1) {
+      try { this.engineOsc1.stop(); } catch (e) {}
+    }
+    if (this.engineOsc2) {
+      try { this.engineOsc2.stop(); } catch (e) {}
+    }
+    if (this.driftNoiseNode) {
+      try { this.driftNoiseNode.stop(); } catch (e) {}
+    }
+    if (this.nitroNoiseNode) {
+      try { this.nitroNoiseNode.stop(); } catch (e) {}
+    }
+    if (this.audioCtx && typeof this.audioCtx.close === 'function') {
+      try { this.audioCtx.close(); } catch (e) {}
+    }
+    this.isInitialized = false;
   }
 }

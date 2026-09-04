@@ -254,8 +254,9 @@ export class Game {
     this.fixedDt = 1 / 60;
     this.maxAccumulator = 0.25;
 
-    // Banner notification timer
+    // Banner notification timer & lap tracking
     this.notificationTimeout = null;
+    this._lastNotifiedLap = 1;
 
     // Staggered starting grid definitions (row offsets along track)
     this.gridSlots = [
@@ -534,6 +535,9 @@ export class Game {
     // Start button
     if (this.ui.startBtn) {
       this.ui.startBtn.addEventListener('click', () => {
+        if (typeof document !== 'undefined' && document.activeElement && typeof document.activeElement.blur === 'function') {
+          document.activeElement.blur();
+        }
         this.soundManager.startAudio();
         this.soundManager.startMusic();
         this.startCountdown();
@@ -543,6 +547,9 @@ export class Game {
     // Resume button
     if (this.ui.resumeBtn) {
       this.ui.resumeBtn.addEventListener('click', () => {
+        if (typeof document !== 'undefined' && document.activeElement && typeof document.activeElement.blur === 'function') {
+          document.activeElement.blur();
+        }
         this.resume();
       });
     }
@@ -550,21 +557,31 @@ export class Game {
     // Restart button
     if (this.ui.restartBtn) {
       this.ui.restartBtn.addEventListener('click', () => {
+        if (typeof document !== 'undefined' && document.activeElement && typeof document.activeElement.blur === 'function') {
+          document.activeElement.blur();
+        }
         this.restartRace();
       });
     }
 
-    // Global keyboard shortcuts (Pause toggle on Esc/P, Start on Enter/Space in MENU)
+    // Global keyboard shortcuts (Pause toggle on Esc/P, Start on Enter/Space in MENU, Restart in FINISH)
     this._onKeyDown = (e) => {
       const code = e.code || e.key;
       if (code === 'Escape' || code === 'KeyP' || code === 'p' || code === 'P') {
         if (this.state === GAME_STATES.RACING || this.state === GAME_STATES.PAUSED) {
           this.togglePause();
+          // Consume pause pulse in InputState to prevent double-toggle in animation frame loop
+          if (this.inputManager?.state) {
+            this.inputManager.state._pause = false;
+            this.inputManager.state._virtualPause = false;
+          }
         }
       } else if ((code === 'Enter' || code === 'Space' || code === ' ') && this.state === GAME_STATES.MENU) {
         this.soundManager.startAudio();
         this.soundManager.startMusic();
         this.startCountdown();
+      } else if ((code === 'Enter' || code === 'Space' || code === ' ' || code === 'KeyR' || code === 'r' || code === 'R') && this.state === GAME_STATES.FINISH) {
+        this.restartRace();
       }
     };
     if (typeof window !== 'undefined') {
@@ -616,6 +633,10 @@ export class Game {
         show(this.ui.pauseScreen, false);
         show(this.ui.finishScreen, false);
         show(this.ui.countdownOverlay, false);
+        // Reset physics accumulator so stale time from countdown/pause
+        // doesn't cause a burst of catch-up physics steps
+        this.physicsAccumulator = 0;
+        this.lastFrameTime = (typeof performance !== 'undefined' ? performance.now() : Date.now());
         if (this.cameraController) {
           this.cameraController.setMenuMode(false);
         }
@@ -672,7 +693,7 @@ export class Game {
 
       // Hide countdown overlay shortly after GO
       setTimeout(() => {
-        if (this.state === GAME_STATES.RACING && this.ui.countdownOverlay) {
+        if (this.state !== GAME_STATES.COUNTDOWN && this.ui.countdownOverlay) {
           this.ui.countdownOverlay.classList.add('hidden');
         }
       }, 700);
@@ -797,16 +818,39 @@ export class Game {
     this.playerCar.physics.heading = initialPlayerHeading;
     this.playerCar.physics.speed = 0;
     this.playerCar.physics.velocity.set(0, 0, 0);
+    this.playerCar.physics.steerAngle = 0;
     this.playerCar.physics.distanceAlongTrack = playerSlot.distOffset;
     this.playerCar.physics.splineProgress = playerT;
+    this.playerCar.physics.lateralDistance = 0;
     this.playerCar.physics.nitroLevel = 100.0;
     this.playerCar.physics.isBoosting = false;
     this.playerCar.physics.isDrifting = false;
+    this.playerCar.physics.driftAngle = 0;
+    this.playerCar.physics.driftDuration = 0;
+    this.playerCar.physics.lateralSlip = 0;
+    this.playerCar.physics.hasMiniTurbo = false;
+    this.playerCar.physics.isBraking = false;
+    this.playerCar.physics.hasCollidedBarrier = false;
     this.playerCar.currentLap = 1;
+    this.playerCar.previousProgress = playerT;
+    this.playerCar.pitch = 0;
+    this.playerCar.roll = 0;
 
     if (this.playerCar.mesh) {
       this.playerCar.mesh.position.set(initialPlayerPos.x, initialPlayerPos.y, initialPlayerPos.z);
-      this.playerCar.mesh.rotation.y = initialPlayerHeading;
+      if (typeof this.playerCar.mesh.rotation.set === 'function') {
+        this.playerCar.mesh.rotation.set(0, initialPlayerHeading, 0);
+      } else {
+        this.playerCar.mesh.rotation.x = 0;
+        this.playerCar.mesh.rotation.y = initialPlayerHeading;
+        this.playerCar.mesh.rotation.z = 0;
+      }
+      if (typeof this.playerCar.mesh.setSteering === 'function') {
+        this.playerCar.mesh.setSteering(0);
+      }
+      if (typeof this.playerCar.mesh.setBraking === 'function') {
+        this.playerCar.mesh.setBraking(false);
+      }
     }
 
     // 2. Reset AI Rivals
@@ -819,6 +863,8 @@ export class Game {
 
       ai.resetToTrack(this.trackMath, slot.distOffset, slot.laneOffset);
     }
+
+    this._lastNotifiedLap = 1;
   }
 
   /**
@@ -827,6 +873,7 @@ export class Game {
   restartRace() {
     this.raceManager.reset();
     this.resetStartingGrid();
+    this._lastNotifiedLap = 1;
     this.startCountdown();
   }
 
@@ -845,6 +892,10 @@ export class Game {
     // Check single-frame reset pulse
     if (input.reset) {
       this.playerCar.resetToTrack(this.trackMath);
+      if (this.inputManager?.state) {
+        this.inputManager.state._reset = false;
+        this.inputManager.state._virtualReset = false;
+      }
     }
 
     // 2. Update Player Car physics
@@ -864,12 +915,13 @@ export class Game {
 
     // 3. Update 5 AI Rivals
     const allVehicles = [this.playerCar, ...this.aiCars];
+    const playerTotalDist = (Math.max(1, this.raceManager.currentLap) - 1) * this.trackMath.totalLength + (this.playerCar.physics.distanceAlongTrack || 0);
     for (const ai of this.aiCars) {
       ai.update(
         dt,
         this.trackMath,
         this.playerCar.position,
-        this.playerCar.physics.distanceAlongTrack,
+        playerTotalDist,
         allVehicles
       );
     }
@@ -879,7 +931,8 @@ export class Game {
 
     // 5. Modulate Procedural Web Audio
     if (this.soundManager.isInitialized) {
-      this.soundManager.setEngineRPM(this.playerCar.getSpeed());
+      const isAccelerating = (activeInput.throttle || 0) > 0.05;
+      this.soundManager.updateEngine(this.playerCar.getSpeed(), isAccelerating);
 
       const driftIntensity = this.playerCar.isDrifting
         ? Math.min(1.0, Math.abs(this.playerCar.driftAngle) / 0.35)
@@ -953,15 +1006,21 @@ export class Game {
       this.ui.hudBestLap.textContent = RaceManager.formatTime(raceInfo.bestLapTime);
     }
 
-    // Speedometer
+    // Speedometer (display absolute speed in km/h for both forward and reverse)
     if (this.ui.hudSpeed) {
-      this.ui.hudSpeed.textContent = String(Math.max(0, this.playerCar.getSpeedKmH()));
+      this.ui.hudSpeed.textContent = String(Math.round(Math.abs(this.playerCar.getSpeed()) * 3.6));
     }
 
     // Nitro meter fill
     if (this.ui.hudNitroFill) {
       const nitroPct = Math.max(0, Math.min(100, this.playerCar.getNitroLevel()));
       this.ui.hudNitroFill.style.width = `${nitroPct}%`;
+    }
+
+    // Lap change banner notification
+    if (this._lastNotifiedLap !== raceInfo.currentLap && raceInfo.currentLap > 1) {
+      this._lastNotifiedLap = raceInfo.currentLap;
+      this.showNotification(raceInfo.isFinalLap ? 'FINAL LAP!' : `LAP ${raceInfo.currentLap} / ${raceInfo.totalLaps}`, 1500);
     }
 
     // Notifications (mini-turbo, drafting)
@@ -998,8 +1057,13 @@ export class Game {
       }
 
       // 2. Decoupled fixed 60Hz physics accumulator loop
+      //    Cap accumulator to maxAccumulator to prevent spiral-of-death
+      //    (if physics can't keep up, we drop frames rather than freeze)
       if (this.state === GAME_STATES.RACING) {
         this.physicsAccumulator += dtSec;
+        if (this.physicsAccumulator > this.maxAccumulator) {
+          this.physicsAccumulator = this.maxAccumulator;
+        }
         while (this.physicsAccumulator >= this.fixedDt) {
           this.stepPhysics(this.fixedDt);
           this.physicsAccumulator -= this.fixedDt;
@@ -1007,17 +1071,36 @@ export class Game {
       } else if (this.state === GAME_STATES.FINISH) {
         // Slow-motion physics accumulator in finish
         this.physicsAccumulator += dtSec * 0.35;
+        if (this.physicsAccumulator > this.maxAccumulator) {
+          this.physicsAccumulator = this.maxAccumulator;
+        }
         while (this.physicsAccumulator >= this.fixedDt) {
           this.stepPhysics(this.fixedDt);
           this.physicsAccumulator -= this.fixedDt;
         }
       }
 
-      // 3. Camera update
+      // 3. Input processing & Camera update
+      const input = this.inputManager?.getInputState
+        ? this.inputManager.getInputState()
+        : (this.inputManager?.getState ? this.inputManager.getState() : (this.inputManager?.state?.getState ? this.inputManager.state.getState() : (this.inputManager?.state || null)));
+
+      if (input?.pause && (this.state === GAME_STATES.RACING || this.state === GAME_STATES.PAUSED)) {
+        this.togglePause();
+        if (this.inputManager?.state) {
+          this.inputManager.state._pause = false;
+          this.inputManager.state._virtualPause = false;
+        }
+      }
+      if (input?.reset && this.state === GAME_STATES.RACING) {
+        this.playerCar.resetToTrack(this.trackMath);
+        if (this.inputManager?.state) {
+          this.inputManager.state._reset = false;
+          this.inputManager.state._virtualReset = false;
+        }
+      }
+
       if (this.cameraController) {
-        const input = this.inputManager?.getInputState
-          ? this.inputManager.getInputState()
-          : (this.inputManager?.getState ? this.inputManager.getState() : (this.inputManager?.state?.getState ? this.inputManager.state.getState() : (this.inputManager?.state || null)));
         this.cameraController.update(
           this.playerCar,
           dtSec,
@@ -1086,6 +1169,14 @@ export class Game {
 
     if (this.particleSystem && typeof this.particleSystem.dispose === 'function') {
       this.particleSystem.dispose();
+    }
+
+    if (this.soundManager) {
+      if (typeof this.soundManager.dispose === 'function') {
+        this.soundManager.dispose();
+      } else if (typeof this.soundManager.stopMusic === 'function') {
+        this.soundManager.stopMusic();
+      }
     }
 
     if (this.renderer && typeof this.renderer.dispose === 'function') {

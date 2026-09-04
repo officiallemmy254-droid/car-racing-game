@@ -320,3 +320,11 @@ body, html {
   0% { transform: translate(-50%, -50%) scale(0.9); opacity: 0.8; }
   100% { transform: translate(-50%, -50%) scale(1.1); opacity: 1.0; }
 }
+
+/* Elevate dashboard above touch controls on touch / mobile screens */
+@media (max-width: 900px), (pointer: coarse) {
+  #dashboard {
+    bottom: 104px;
+    right: 24px;
+  }
+}
